@@ -1,4 +1,7 @@
+# ==============================
 # Python
+# ==============================
+
 __pycache__/
 *.py[cod]
 *.so
@@ -6,48 +9,79 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# ==============================
 # Virtual environments
+# ==============================
+
 .venv/
 venv/
 env/
 
+# ==============================
 # Jupyter
+# ==============================
+
 .ipynb_checkpoints/
 
+# ==============================
 # Environment variables / secrets
+# ==============================
+
 .env
 .env.*
 !.env.example
 
+# ==============================
 # Model weights
+# ==============================
+
 *.pt
 *.pth
 *.onnx
 *.engine
 
+# ==============================
 # Datasets
+# ==============================
+
 datasets/*/raw/*
 datasets/*/frames/*
 datasets/*/processed/*
 datasets/*/annotations/*
 
+# ==============================
 # Generated outputs
+# ==============================
+
 outputs/*
 experiments/*
 
+# ==============================
 # Logs
+# ==============================
+
 *.log
 
+# ==============================
 # OS
+# ==============================
+
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
-EOF
 # ==============================
-# Datasets
+# IDE
 # ==============================
 
-datasets/
+.vscode/
+.idea/
+
+datasets/*/benchmarks/
+
+# ==============================
+# Generated outputs
+# ==============================
+
+outputs/*
+experiments/*
+ai-engine/notebooks/runs/
