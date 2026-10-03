@@ -85,3 +85,11 @@ datasets/*/benchmarks/
 outputs/*
 experiments/*
 ai-engine/notebooks/runs/
+
+MixFormer_sports_train.pth.tar
+MixFormerOnlineScore.pth.tar
+*.pt
+*.pth
+*.pth.tar
+# Third-party repositories
+ai-engine/third_party/
