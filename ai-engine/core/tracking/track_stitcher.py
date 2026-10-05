@@ -1,7 +1,12 @@
 from typing import Dict, List, Tuple
+from pathlib import Path
 import math
 
-from track_state import TrackState
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
+from .track_state import TrackState
+from .reid_model import OSNetReID
 
 
 class TrackStitcher:
@@ -32,6 +37,8 @@ class TrackStitcher:
         velocity_weight: float = 0.30,
         min_stitch_confidence: float = 0.70,
         max_prediction_speed: float = 30.0,
+        reid_checkpoint=None,
+        reid_threshold: float = 0.70,
     ):
 
         self.max_distance = max_distance
@@ -41,6 +48,20 @@ class TrackStitcher:
 
         # Maximum velocity allowed for trajectory prediction.
         self.max_prediction_speed = max_prediction_speed
+
+        # -----------------------------------------------------
+        # Production Re-ID
+        # -----------------------------------------------------
+
+        self.reid_threshold = reid_threshold
+
+        self.reid_model = None
+
+        if reid_checkpoint is not None:
+            self.reid_model = OSNetReID(
+                checkpoint_path=reid_checkpoint,
+                device="cuda",
+            )
 
         # canonical_id -> TrackState
         self.states: Dict[int, TrackState] = {}
@@ -320,6 +341,339 @@ class TrackStitcher:
         )
 
     # =========================================================
+    # PRODUCTION RE-ID MATCHING
+    # =========================================================
+
+    def _extract_reid_embedding(
+        self,
+        frame,
+        bbox,
+    ):
+        """
+        Extract a normalized OSNet embedding from one player.
+        """
+
+        if self.reid_model is None:
+            return None
+
+        return self.reid_model.extract_from_bbox(
+            frame,
+            bbox,
+        )
+
+    def _reid_similarity(
+        self,
+        embedding_a,
+        embedding_b,
+    ):
+        """
+        Compute cosine similarity between two Re-ID embeddings.
+        """
+
+        if (
+            embedding_a is None
+            or embedding_b is None
+        ):
+            return None
+
+        return self.reid_model.cosine_similarity(
+            embedding_a,
+            embedding_b,
+        )
+
+    def _build_reid_candidates(
+        self,
+        mixsort_tracks,
+        frame,
+        frame_id,
+    ):
+        """
+        Build candidate matches between new MixSort IDs
+        and LOST canonical identities.
+
+        Candidate generation uses the validated spatial rule:
+
+            prediction_distance <= max_distance
+
+        Re-ID is then used as the appearance gate.
+        """
+
+        candidates = []
+
+        # -----------------------------------------------------
+        # Only tracks that do not already have a mapping
+        # are considered new identities.
+        # -----------------------------------------------------
+
+        new_tracks = [
+            track
+            for track in mixsort_tracks
+            if int(track["track_id"])
+            not in self.track_to_canonical
+        ]
+
+        for track in new_tracks:
+
+            mixsort_id = int(track["track_id"])
+
+            bbox = [
+                float(v)
+                for v in track["bbox"]
+            ]
+
+            position = self._center_from_bbox(
+                bbox
+            )
+
+            # -------------------------------------------------
+            # Extract NEW track appearance once.
+            # -------------------------------------------------
+
+            new_embedding = self._extract_reid_embedding(
+                frame,
+                bbox,
+            )
+
+            if new_embedding is None:
+                continue
+
+            # -------------------------------------------------
+            # Compare against LOST identities only.
+            # -------------------------------------------------
+
+            for canonical_id in list(
+                self.lost_ids
+            ):
+
+                state = self.states[
+                    canonical_id
+                ]
+
+                gap = (
+                    frame_id
+                    - state.last_frame
+                )
+
+                if gap <= 0:
+                    continue
+
+                if gap > self.max_frame_gap:
+                    continue
+
+                # ---------------------------------------------
+                # Motion prediction
+                # ---------------------------------------------
+
+                predicted = self._predict_position(
+                    state,
+                    frame_id,
+                )
+
+                prediction_distance = self._distance(
+                    predicted,
+                    position,
+                )
+
+                # ---------------------------------------------
+                # Hard spatial gate
+                # ---------------------------------------------
+
+                if (
+                    prediction_distance
+                    > self.max_distance
+                ):
+                    continue
+
+                # ---------------------------------------------
+                # Re-ID gate
+                # ---------------------------------------------
+
+                if state.reid_embedding is None:
+                    continue
+
+                reid_score = self._reid_similarity(
+                    state.reid_embedding,
+                    new_embedding,
+                )
+
+                if reid_score is None:
+                    continue
+
+                if (
+                    reid_score
+                    < self.reid_threshold
+                ):
+                    continue
+
+                # ---------------------------------------------
+                # Motion confidence
+                # ---------------------------------------------
+
+                position_confidence = max(
+                    0.0,
+                    1.0
+                    - (
+                        prediction_distance
+                        / self.max_distance
+                    ),
+                )
+
+                velocity_confidence = (
+                    self._velocity_similarity(
+                        state,
+                        position,
+                        gap,
+                    )
+                )
+
+                time_confidence = max(
+                    0.0,
+                    1.0
+                    - (
+                        (gap - 1)
+                        / self.max_frame_gap
+                    ),
+                )
+
+                # ---------------------------------------------
+                # Combined score
+                #
+                # Re-ID is the strongest identity signal,
+                # while motion remains a hard constraint.
+                # ---------------------------------------------
+
+                motion_score = (
+                    0.60
+                    * position_confidence
+                    +
+                    self.velocity_weight
+                    * velocity_confidence
+                    +
+                    0.10
+                    * time_confidence
+                )
+
+                combined_score = (
+                    0.70 * reid_score
+                    +
+                    0.30 * motion_score
+                )
+
+                candidates.append({
+                    "mixsort_id": mixsort_id,
+                    "canonical_id": canonical_id,
+                    "bbox": bbox,
+                    "position": position,
+                    "embedding": new_embedding,
+                    "gap": gap,
+                    "prediction_distance": prediction_distance,
+                    "reid_score": reid_score,
+                    "motion_score": motion_score,
+                    "combined_score": combined_score,
+                })
+
+        return candidates
+
+    def _hungarian_match(
+        self,
+        candidates,
+    ):
+        """
+        Perform one-to-one global assignment.
+
+        Returns:
+            list of accepted candidate dictionaries.
+        """
+
+        if not candidates:
+            return []
+
+        new_ids = sorted({
+            candidate["mixsort_id"]
+            for candidate in candidates
+        })
+
+        canonical_ids = sorted({
+            candidate["canonical_id"]
+            for candidate in candidates
+        })
+
+        new_index = {
+            track_id: index
+            for index, track_id
+            in enumerate(new_ids)
+        }
+
+        canonical_index = {
+            canonical_id: index
+            for index, canonical_id
+            in enumerate(canonical_ids)
+        }
+
+        # Cost matrix.
+        cost_matrix = np.full(
+            (
+                len(new_ids),
+                len(canonical_ids),
+            ),
+            1e6,
+            dtype=np.float32,
+        )
+
+        candidate_lookup = {}
+
+        for candidate in candidates:
+
+            i = new_index[
+                candidate["mixsort_id"]
+            ]
+
+            j = canonical_index[
+                candidate["canonical_id"]
+            ]
+
+            # Hungarian minimizes cost.
+            cost = (
+                1.0
+                - candidate["combined_score"]
+            )
+
+            cost_matrix[i, j] = cost
+
+            candidate_lookup[
+                (
+                    candidate["mixsort_id"],
+                    candidate["canonical_id"],
+                )
+            ] = candidate
+
+        rows, cols = linear_sum_assignment(
+            cost_matrix
+        )
+
+        assignments = []
+
+        for row, col in zip(rows, cols):
+
+            if cost_matrix[row, col] >= 1e6:
+                continue
+
+            mixsort_id = new_ids[row]
+            canonical_id = canonical_ids[col]
+
+            candidate = candidate_lookup.get(
+                (
+                    mixsort_id,
+                    canonical_id,
+                )
+            )
+
+            if candidate is not None:
+                assignments.append(candidate)
+
+        return assignments
+
+    # =========================================================
     # UPDATE
     # =========================================================
 
@@ -327,17 +681,45 @@ class TrackStitcher:
         self,
         mixsort_tracks: List[dict],
         frame_id: int,
+        frame=None,
     ):
+        """
+        Update canonical identities using MixSort + motion + Re-ID.
 
-        current_mixsort_ids = {
-            int(track["track_id"])
-            for track in mixsort_tracks
-        }
+        Parameters
+        ----------
+        mixsort_tracks : list of dict
+            MixSort outputs.
+
+        frame_id : int
+            Current frame number.
+
+        frame : np.ndarray, optional
+            Current BGR video frame.
+
+        Pipeline
+        --------
+        1. Move disappeared ACTIVE identities to LOST.
+        2. Update existing MixSort -> canonical mappings.
+        3. Generate candidates for all NEW MixSort IDs.
+        4. Perform global Hungarian assignment.
+        5. Apply accepted stitches.
+        6. Create canonical identities for unmatched new tracks.
+        7. Remove stale LOST identities.
+        """
+
+        if mixsort_tracks is None:
+            mixsort_tracks = []
 
         # =====================================================
         # STEP 1
         # Move disappeared ACTIVE identities to LOST.
         # =====================================================
+
+        current_mixsort_ids = {
+            int(track["track_id"])
+            for track in mixsort_tracks
+        }
 
         for canonical_id in list(
             self.active_ids
@@ -362,14 +744,36 @@ class TrackStitcher:
                     canonical_id
                 )
 
-        results = []
-
         # =====================================================
         # STEP 2
-        # Process current MixSort tracks.
+        # Separate existing and NEW MixSort tracks.
         # =====================================================
 
+        existing_tracks = []
+        new_tracks = []
+
         for track in mixsort_tracks:
+
+            mixsort_id = int(
+                track["track_id"]
+            )
+
+            if mixsort_id in self.track_to_canonical:
+                existing_tracks.append(track)
+            else:
+                new_tracks.append(track)
+
+        # =====================================================
+        # STEP 3
+        # Update existing identities.
+        #
+        # We deliberately keep their previous Re-ID embedding
+        # until a new identity transition is confirmed.
+        # =====================================================
+
+        results = []
+
+        for track in existing_tracks:
 
             mixsort_id = int(
                 track["track_id"]
@@ -388,19 +792,311 @@ class TrackStitcher:
                 track.get("score", 0.0)
             )
 
+            canonical_id = (
+                self.track_to_canonical[
+                    mixsort_id
+                ]
+            )
+
+            state = self.states[
+                canonical_id
+            ]
+
+            state.update(
+                position=position,
+                bbox=bbox,
+                frame_id=frame_id,
+                track_id=mixsort_id,
+                identity_confidence=1.0,
+            )
+
+            self.active_ids.add(
+                canonical_id
+            )
+
+            self.lost_ids.discard(
+                canonical_id
+            )
+
+            results.append({
+                "mixsort_id": mixsort_id,
+                "canonical_id": canonical_id,
+                "bbox": bbox,
+                "center": position,
+                "score": score,
+                "stitched": False,
+                "identity_confidence": 1.0,
+            })
+
+        # =====================================================
+        # STEP 4
+        # Build Re-ID embeddings for NEW MixSort tracks.
+        #
+        # This is done once per new MixSort ID.
+        # =====================================================
+
+        new_track_embeddings = {}
+
+        if (
+            frame is not None
+            and self.reid_model is not None
+        ):
+
+            for track in new_tracks:
+
+                mixsort_id = int(
+                    track["track_id"]
+                )
+
+                bbox = [
+                    float(v)
+                    for v in track["bbox"]
+                ]
+
+                embedding = (
+                    self._extract_reid_embedding(
+                        frame,
+                        bbox,
+                    )
+                )
+
+                if embedding is not None:
+                    new_track_embeddings[
+                        mixsort_id
+                    ] = embedding
+
+        # =====================================================
+        # STEP 5
+        # Generate candidates for ALL new tracks.
+        #
+        # We temporarily expose the embeddings through the
+        # track dictionaries so the candidate engine can use
+        # the same frame-level candidate pool.
+        # =====================================================
+
+        candidate_tracks = []
+
+        for track in new_tracks:
+
+            mixsort_id = int(
+                track["track_id"]
+            )
+
+            if mixsort_id not in new_track_embeddings:
+                continue
+
+            candidate_track = dict(track)
+
+            candidate_track["_reid_embedding"] = (
+                new_track_embeddings[
+                    mixsort_id
+                ]
+            )
+
+            candidate_tracks.append(
+                candidate_track
+            )
+
+        # =====================================================
+        # STEP 6
+        # Build candidates manually using the precomputed
+        # embeddings.
+        #
+        # This avoids running OSNet repeatedly for every
+        # LOST identity.
+        # =====================================================
+
+        candidates = []
+
+        for track in candidate_tracks:
+
+            mixsort_id = int(
+                track["track_id"]
+            )
+
+            bbox = [
+                float(v)
+                for v in track["bbox"]
+            ]
+
+            position = self._center_from_bbox(
+                bbox
+            )
+
+            new_embedding = (
+                track["_reid_embedding"]
+            )
+
+            for canonical_id in list(
+                self.lost_ids
+            ):
+
+                state = self.states[
+                    canonical_id
+                ]
+
+                gap = (
+                    frame_id
+                    - state.last_frame
+                )
+
+                if gap <= 0:
+                    continue
+
+                if gap > self.max_frame_gap:
+                    continue
+
+                if state.reid_embedding is None:
+                    continue
+
+                predicted = self._predict_position(
+                    state,
+                    frame_id,
+                )
+
+                prediction_distance = self._distance(
+                    predicted,
+                    position,
+                )
+
+                # Validated hard spatial gate.
+                if (
+                    prediction_distance
+                    > self.max_distance
+                ):
+                    continue
+
+                reid_score = self._reid_similarity(
+                    state.reid_embedding,
+                    new_embedding,
+                )
+
+                if reid_score is None:
+                    continue
+
+                # Validated Re-ID gate.
+                if (
+                    reid_score
+                    < self.reid_threshold
+                ):
+                    continue
+
+                position_confidence = max(
+                    0.0,
+                    1.0
+                    - (
+                        prediction_distance
+                        / self.max_distance
+                    ),
+                )
+
+                velocity_confidence = (
+                    self._velocity_similarity(
+                        state,
+                        position,
+                        gap,
+                    )
+                )
+
+                time_confidence = max(
+                    0.0,
+                    1.0
+                    - (
+                        (gap - 1)
+                        / self.max_frame_gap
+                    ),
+                )
+
+                motion_score = (
+                    0.60
+                    * position_confidence
+                    +
+                    self.velocity_weight
+                    * velocity_confidence
+                    +
+                    0.10
+                    * time_confidence
+                )
+
+                combined_score = (
+                    0.70 * reid_score
+                    +
+                    0.30 * motion_score
+                )
+
+                candidates.append({
+                    "mixsort_id": mixsort_id,
+                    "canonical_id": canonical_id,
+                    "bbox": bbox,
+                    "position": position,
+                    "embedding": new_embedding,
+                    "gap": gap,
+                    "prediction_distance": prediction_distance,
+                    "reid_score": reid_score,
+                    "motion_score": motion_score,
+                    "combined_score": combined_score,
+                })
+
+        # =====================================================
+        # STEP 7
+        # Global one-to-one Hungarian assignment.
+        # =====================================================
+
+        assignments = self._hungarian_match(
+            candidates
+        )
+
+        assignment_by_mixsort = {
+            candidate["mixsort_id"]: candidate
+            for candidate in assignments
+        }
+
+        # =====================================================
+        # STEP 8
+        # Process every NEW MixSort track.
+        # =====================================================
+
+        for track in new_tracks:
+
+            mixsort_id = int(
+                track["track_id"]
+            )
+
+            bbox = [
+                float(v)
+                for v in track["bbox"]
+            ]
+
+            position = self._center_from_bbox(
+                bbox
+            )
+
+            score = float(
+                track.get("score", 0.0)
+            )
+
+            embedding = new_track_embeddings.get(
+                mixsort_id
+            )
+
+            assignment = assignment_by_mixsort.get(
+                mixsort_id
+            )
+
             stitched = False
-            identity_confidence = 1.0
 
             # -------------------------------------------------
-            # Existing MixSort → canonical mapping
+            # Successful global stitch
             # -------------------------------------------------
 
-            if mixsort_id in self.track_to_canonical:
+            if assignment is not None:
 
                 canonical_id = (
-                    self.track_to_canonical[
-                        mixsort_id
-                    ]
+                    assignment["canonical_id"]
+                )
+
+                confidence = float(
+                    assignment["combined_score"]
                 )
 
                 state = self.states[
@@ -412,8 +1108,13 @@ class TrackStitcher:
                     bbox=bbox,
                     frame_id=frame_id,
                     track_id=mixsort_id,
-                    identity_confidence=1.0,
+                    identity_confidence=confidence,
+                    reid_embedding=embedding,
                 )
+
+                self.track_to_canonical[
+                    mixsort_id
+                ] = canonical_id
 
                 self.active_ids.add(
                     canonical_id
@@ -423,108 +1124,55 @@ class TrackStitcher:
                     canonical_id
                 )
 
+                self.total_stitches += 1
+
+                stitched = True
+                identity_confidence = confidence
+
+            # -------------------------------------------------
+            # No valid stitch → create NEW canonical identity
+            # -------------------------------------------------
+
             else:
 
-                # =============================================
-                # New MixSort ID
-                # =============================================
-
-                (
-                    matched_id,
-                    confidence,
-                ) = self._find_best_lost_match(
-                    position,
-                    frame_id,
+                canonical_id = (
+                    self.next_canonical_id
                 )
 
-                if (
-                    matched_id is not None
-                    and confidence
-                    >= self.min_stitch_confidence
-                ):
+                self.next_canonical_id += 1
 
-                    # =========================================
-                    # Successful stitch
-                    # =========================================
+                state = TrackState(
+                    canonical_id=canonical_id,
+                    current_track_id=mixsort_id,
+                    position=position,
+                    bbox=bbox,
+                    last_frame=frame_id,
+                )
 
-                    canonical_id = matched_id
+                state.update(
+                    position=position,
+                    bbox=bbox,
+                    frame_id=frame_id,
+                    track_id=mixsort_id,
+                    identity_confidence=1.0,
+                    reid_embedding=embedding,
+                )
 
-                    state = self.states[
-                        canonical_id
-                    ]
+                self.states[
+                    canonical_id
+                ] = state
 
-                    state.update(
-                        position=position,
-                        bbox=bbox,
-                        frame_id=frame_id,
-                        track_id=mixsort_id,
-                        identity_confidence=confidence,
-                    )
+                self.track_to_canonical[
+                    mixsort_id
+                ] = canonical_id
 
-                    self.track_to_canonical[
-                        mixsort_id
-                    ] = canonical_id
+                self.active_ids.add(
+                    canonical_id
+                )
 
-                    self.active_ids.add(
-                        canonical_id
-                    )
+                self.total_new_players += 1
 
-                    self.lost_ids.discard(
-                        canonical_id
-                    )
-
-                    self.total_stitches += 1
-
-                    stitched = True
-                    identity_confidence = (
-                        confidence
-                    )
-
-                else:
-
-                    # =========================================
-                    # Completely new canonical identity
-                    # =========================================
-
-                    canonical_id = (
-                        self.next_canonical_id
-                    )
-
-                    self.next_canonical_id += 1
-
-                    state = TrackState(
-                        canonical_id=canonical_id,
-                        current_track_id=mixsort_id,
-                        position=position,
-                        bbox=bbox,
-                        last_frame=frame_id,
-                    )
-
-                    state.update(
-                        position=position,
-                        bbox=bbox,
-                        frame_id=frame_id,
-                        track_id=mixsort_id,
-                        identity_confidence=1.0,
-                    )
-
-                    self.states[
-                        canonical_id
-                    ] = state
-
-                    self.track_to_canonical[
-                        mixsort_id
-                    ] = canonical_id
-
-                    self.active_ids.add(
-                        canonical_id
-                    )
-
-                    self.total_new_players += 1
-
-            # -------------------------------------------------
-            # Output
-            # -------------------------------------------------
+                identity_confidence = 1.0
 
             results.append({
                 "mixsort_id": mixsort_id,
@@ -539,8 +1187,8 @@ class TrackStitcher:
             })
 
         # =====================================================
-        # STEP 3
-        # Remove identities that have been lost too long.
+        # STEP 9
+        # Remove identities that have been LOST too long.
         # =====================================================
 
         stale_ids = []
@@ -570,12 +1218,11 @@ class TrackStitcher:
                 canonical_id
             )
 
-            # Remove the state.
-            del self.states[
-                canonical_id
-            ]
+            if canonical_id in self.states:
+                del self.states[
+                    canonical_id
+                ]
 
-            # Remove any old MixSort mappings.
             stale_mappings = [
                 mixsort_id
                 for mixsort_id, cid
@@ -590,6 +1237,7 @@ class TrackStitcher:
                 ]
 
         return results
+
 
     # =========================================================
     # STATISTICS
