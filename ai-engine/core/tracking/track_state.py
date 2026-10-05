@@ -29,6 +29,10 @@ class TrackState:
     team_id: Optional[int] = None
     identity_confidence: float = 1.0
 
+    # Latest appearance embedding from the production Re-ID model.
+    # Expected shape: (512,)
+    reid_embedding: Optional[object] = None
+
     track_history: List[int] = field(default_factory=list)
 
     # Recent (frame, x, y) observations.
@@ -46,6 +50,7 @@ class TrackState:
         frame_id: int,
         track_id: int,
         identity_confidence: Optional[float] = None,
+        reid_embedding=None,
     ):
         """
         Update the canonical track with a new observation.
@@ -61,6 +66,13 @@ class TrackState:
 
         if identity_confidence is not None:
             self.identity_confidence = identity_confidence
+
+        # ----------------------------------------------------
+        # Re-ID appearance embedding
+        # ----------------------------------------------------
+
+        if reid_embedding is not None:
+            self.reid_embedding = reid_embedding
 
         # ----------------------------------------------------
         # Track ID history
