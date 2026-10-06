@@ -93,3 +93,4 @@ MixFormerOnlineScore.pth.tar
 *.pth.tar
 # Third-party repositories
 ai-engine/third_party/
+ai-engine/models/ball_detector_soccernet_5ep/
