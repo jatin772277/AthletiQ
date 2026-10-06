@@ -1,0 +1,7 @@
+path: /mnt/d/My Projects/AthletiQ/AthletiQ/datasets/football/processed/soccernet_ball_yolo
+train: images/train
+val: images/val
+test: images/test
+
+names:
+  0: ball
