@@ -1,6 +1,7 @@
+
 tracker:
   name: MixSort
-  track_thresh: 0.6
+  track_thresh: 0.1
   track_buffer: 30
   match_thresh: 0.9
   iou_thresh: 0.3
