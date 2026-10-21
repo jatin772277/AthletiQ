@@ -1,0 +1,35 @@
+{
+    "model_name": "AthletiQ Football Player Detector",
+    "model_type": "YOLO",
+    "checkpoint": "football_player_detector.pt",
+    "source_checkpoint": "yolov26m-sportsmot-football.pt",
+    "task": "player_detection",
+    "sport": "football",
+    "classes": {
+        "0": "player"
+    },
+    "training_dataset": "SportsMOT Football",
+    "training_type": "SportsMOT-specific fine-tuning",
+    "validation_metrics": {
+        "precision": 0.9396,
+        "recall": 0.9416,
+        "mAP50": 0.9664,
+        "mAP50_95": 0.8237
+    },
+    "unseen_test": {
+        "dataset": "SportsMOT Football Test",
+        "sequences": 50,
+        "sampled_frames": 250,
+        "average_detections_per_frame": 13.66,
+        "median_detections_per_frame": 14.0,
+        "average_confidence": 0.872263,
+        "zero_detection_frames": 0,
+        "low_detection_frames_leq_3": 3
+    },
+    "inference": {
+        "confidence_threshold": 0.25,
+        "image_size": 1280
+    },
+    "status": "FINAL_FOOTBALL_PLAYER_DETECTOR",
+    "finalized_on": "2026-09-13T13:26:09.412486"
+}

@@ -1,0 +1,204 @@
+{
+  "model": "MobileNetV3-Small",
+  "classes": [
+    "team_a",
+    "team_b"
+  ],
+  "seed": 42,
+  "image_size": 224,
+  "usable_images": 479,
+  "train_images": 369,
+  "validation_images": 110,
+  "train_ids": [
+    1,
+    2,
+    3,
+    4,
+    12,
+    13,
+    17,
+    19,
+    21,
+    22,
+    24,
+    27,
+    28,
+    30,
+    31,
+    33,
+    37,
+    40,
+    42,
+    44,
+    46,
+    47,
+    49,
+    50,
+    52,
+    53,
+    54,
+    55,
+    56,
+    66,
+    69,
+    70,
+    73
+  ],
+  "validation_ids": [
+    6,
+    10,
+    20,
+    29,
+    38,
+    39,
+    41,
+    60,
+    71
+  ],
+  "best_validation_loss": 0.00590960659425367,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.39893647915302577,
+      "train_accuracy": 0.8943089430894309,
+      "val_loss": 0.2944537325338884,
+      "val_accuracy": 0.9818181818181818
+    },
+    {
+      "epoch": 2,
+      "train_loss": 0.10048188006651756,
+      "train_accuracy": 0.983739837398374,
+      "val_loss": 0.1283001040870493,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 3,
+      "train_loss": 0.03708785101973267,
+      "train_accuracy": 0.991869918699187,
+      "val_loss": 0.11925088275562633,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 4,
+      "train_loss": 0.022320711859034975,
+      "train_accuracy": 1.0,
+      "val_loss": 0.17926593748005953,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 5,
+      "train_loss": 0.015276707183862443,
+      "train_accuracy": 0.997289972899729,
+      "val_loss": 0.20001100410114636,
+      "val_accuracy": 0.9636363636363636
+    },
+    {
+      "epoch": 6,
+      "train_loss": 0.008687946667798813,
+      "train_accuracy": 0.997289972899729,
+      "val_loss": 0.17224495708942414,
+      "val_accuracy": 0.9727272727272728
+    },
+    {
+      "epoch": 7,
+      "train_loss": 0.010400141384906886,
+      "train_accuracy": 1.0,
+      "val_loss": 0.15187153843316165,
+      "val_accuracy": 0.9727272727272728
+    },
+    {
+      "epoch": 8,
+      "train_loss": 0.006237263314244224,
+      "train_accuracy": 1.0,
+      "val_loss": 0.1121154010295868,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 9,
+      "train_loss": 0.012350332716272937,
+      "train_accuracy": 0.997289972899729,
+      "val_loss": 0.08502665812318976,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 10,
+      "train_loss": 0.006965895909008375,
+      "train_accuracy": 0.997289972899729,
+      "val_loss": 0.06033451868729158,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 11,
+      "train_loss": 0.008644210401831604,
+      "train_accuracy": 0.997289972899729,
+      "val_loss": 0.04146137610077858,
+      "val_accuracy": 0.990909090909091
+    },
+    {
+      "epoch": 12,
+      "train_loss": 0.00929682959264856,
+      "train_accuracy": 1.0,
+      "val_loss": 0.023595712740312923,
+      "val_accuracy": 1.0
+    },
+    {
+      "epoch": 13,
+      "train_loss": 0.0370052382097577,
+      "train_accuracy": 0.981029810298103,
+      "val_loss": 0.011209081214937296,
+      "val_accuracy": 1.0
+    },
+    {
+      "epoch": 14,
+      "train_loss": 0.0027200461019506947,
+      "train_accuracy": 1.0,
+      "val_loss": 0.006953996233642101,
+      "val_accuracy": 1.0
+    },
+    {
+      "epoch": 15,
+      "train_loss": 0.002110363456211116,
+      "train_accuracy": 1.0,
+      "val_loss": 0.00590960659425367,
+      "val_accuracy": 1.0
+    }
+  ],
+  "confusion_matrix": [
+    [
+      40,
+      0
+    ],
+    [
+      0,
+      70
+    ]
+  ],
+  "classification_report": {
+    "team_a": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 40.0
+    },
+    "team_b": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 70.0
+    },
+    "accuracy": 1.0,
+    "macro avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 110.0
+    },
+    "weighted avg": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 110.0
+    }
+  },
+  "warning": "Small single-video dataset. Validation metrics are preliminary and do not establish generalization to other matches."
+}
