@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+"""Estimate AthletiQ physical player metrics using existing PnLCalib camera parameters.
+
+Non-destructive: reads stitched tracks and saved calibration JSONs; writes new CSV/JSON
+files under outputs/physical_metrics. Results are estimates until calibration is validated.
+"""
+from __future__ import annotations
+import argparse, json, re
+from pathlib import Path
+from typing import Any
+import numpy as np
+import pandas as pd
+
+def read_json(path: Path) -> dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+def parameter_time(path: Path, data: dict[str, Any]) -> float | None:
+    for key in ("time_seconds", "timestamp_seconds", "time_sec", "time"):
+        value = data.get(key)
+        if isinstance(value, (int, float)):
+            return float(value)
+    m = re.search(r"_(\d+(?:\.\d+)?)s(?:\.json)?$", path.name)
+    if m:
+        return float(m.group(1))
+    m = re.search(r"frame_(\d+)", path.name)
+    return float(m.group(1)) / 25.0 if m else None
+
+def projection_matrix(data: dict[str, Any]) -> np.ndarray:
+    cam = data.get("cam_params", data)
+    fx, fy = float(cam["x_focal_length"]), float(cam["y_focal_length"])
+    cx, cy = map(float, cam["principal_point"])
+    center = np.asarray(cam["position_meters"], dtype=float).reshape(3)
+    rotation = np.asarray(cam["rotation_matrix"], dtype=float).reshape(3, 3)
+    K = np.array([[fx, 0., cx], [0., fy, cy], [0., 0., 1.]])
+    extrinsic = np.eye(4)[:3, :]
+    extrinsic[:, 3] = -center
+    return K @ rotation @ extrinsic
+
+def load_calibrations(param_dir: Path) -> list[dict[str, Any]]:
+    records = []
+    for path in sorted(param_dir.rglob("*.json")):
+        try:
+            data = read_json(path)
+            cam = data.get("cam_params", {})
+            required = ("x_focal_length", "y_focal_length", "principal_point",
+                        "position_meters", "rotation_matrix")
+            if not all(k in cam for k in required):
+                continue
+            t = parameter_time(path, data)
+            if t is None:
+                continue
+            P = projection_matrix(data)
+            H = P[:, [0, 1, 3]]  # Z=0 ground plane, centered pitch coordinates
+            if not np.isfinite(H).all() or abs(np.linalg.det(H)) < 1e-12:
+                continue
+            records.append({"time": t, "path": str(path), "H_inv": np.linalg.inv(H),
+                            "rep_err": data.get("rep_err", np.nan)})
+        except Exception as exc:
+            print(f"[WARN] Skipping {path}: {exc}")
+    return sorted(records, key=lambda r: r["time"])
+
+def image_to_pitch(x: float, y: float, H_inv: np.ndarray):
+    q = H_inv @ np.array([x, y, 1.], dtype=float)
+    if not np.isfinite(q).all() or abs(q[2]) < 1e-9:
+        return None
+    return float(q[0] / q[2] + 52.5), float(q[1] / q[2] + 34.0)
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--project-root", type=Path, default=Path.cwd())
+    p.add_argument("--video-id", default="football2")
+    p.add_argument("--tracks", type=Path)
+    p.add_argument("--params-dir", type=Path)
+    p.add_argument("--fps", type=float, default=25.)
+    p.add_argument("--max-calibration-gap-seconds", type=float, default=2.1)
+    p.add_argument("--max-plausible-speed-mps", type=float, default=12.)
+    a = p.parse_args()
+    root = a.project_root.resolve()
+    tracks_path = a.tracks or root / "outputs/joint_tracking" / f"{a.video_id}_player_tracks_stitched_32.csv"
+    params_dir = a.params_dir or root / "outputs/calibration/pnlcalib/parameters"
+    out_dir = root / "outputs/physical_metrics"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not tracks_path.exists():
+        raise FileNotFoundError(f"Tracking CSV not found: {tracks_path}")
+    if not params_dir.exists():
+        raise FileNotFoundError(f"PnLCalib parameter directory not found: {params_dir}")
+    df = pd.read_csv(tracks_path)
+    required = {"frame_id", "canonical_id", "x1", "y1", "x2", "y2"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Tracking CSV missing columns: {sorted(missing)}")
+    if "time_seconds" not in df:
+        df["time_seconds"] = df["frame_id"] / a.fps
+    calibrations = load_calibrations(params_dir)
+    if not calibrations:
+        raise RuntimeError(f"No usable camera parameter JSONs found in {params_dir}")
+    df["foot_x_px"] = (df["x1"] + df["x2"]) / 2
+    df["foot_y_px"] = df["y2"]
+    out_x, out_y, ct, cp, re_err, gap = [], [], [], [], [], []
+    for row in df.itertuples(index=False):
+        t = float(row.time_seconds)
+        cal = min(calibrations, key=lambda c: abs(c["time"] - t))
+        delta = abs(cal["time"] - t)
+        xy = image_to_pitch(float(row.foot_x_px), float(row.foot_y_px), cal["H_inv"])
+        if xy is None or delta > a.max_calibration_gap_seconds:
+            out_x.append(np.nan); out_y.append(np.nan)
+        else:
+            out_x.append(xy[0]); out_y.append(xy[1])
+        ct.append(cal["time"]); cp.append(cal["path"]); re_err.append(cal["rep_err"]); gap.append(delta)
+    df["pitch_x_m"] = out_x
+    df["pitch_y_m"] = out_y
+    df["calibration_time_seconds"] = ct
+    df["calibration_gap_seconds"] = gap
+    df["calibration_rep_err"] = re_err
+    df["calibration_parameter_file"] = cp
+    df["physical_coordinate_valid"] = df["pitch_x_m"].notna() & df["pitch_y_m"].notna()
+    df["within_nominal_pitch_bounds"] = df["pitch_x_m"].between(0, 105) & df["pitch_y_m"].between(0, 68)
+    df = df.sort_values(["canonical_id", "time_seconds", "frame_id"]).reset_index(drop=True)
+    df["step_distance_m"] = np.nan
+    df["step_speed_mps"] = np.nan
+    df["step_dt_seconds"] = np.nan
+    for _, idx in df.groupby("canonical_id", sort=False).groups.items():
+        g = df.loc[idx]
+        dt = g["time_seconds"].diff()
+        dist = np.sqrt(g["pitch_x_m"].diff()**2 + g["pitch_y_m"].diff()**2)
+        good = (g["physical_coordinate_valid"] & g["physical_coordinate_valid"].shift(1, fill_value=False)
+                & dt.gt(0) & dt.le(.5) & g["calibration_gap_seconds"].le(a.max_calibration_gap_seconds))
+        dist = dist.where(good)
+        speed = (dist / dt).where(good)
+        df.loc[idx, "step_distance_m"] = dist.to_numpy()
+        df.loc[idx, "step_speed_mps"] = speed.to_numpy()
+        df.loc[idx, "step_dt_seconds"] = dt.where(good).to_numpy()
+    df["speed_outlier_flag"] = df["step_speed_mps"] > a.max_plausible_speed_mps
+    accepted = df["step_distance_m"].notna() & ~df["speed_outlier_flag"]
+    df["step_distance_accepted_m"] = df["step_distance_m"].where(accepted)
+    metrics = []
+    for pid, g in df.groupby("canonical_id", sort=True):
+        distances = g["step_distance_accepted_m"].dropna()
+        speeds = g.loc[accepted.loc[g.index], "step_speed_mps"].dropna()
+        valid = g[g["physical_coordinate_valid"]]
+        duration = float(valid["time_seconds"].max() - valid["time_seconds"].min()) if len(valid) >= 2 else 0.
+        total = float(distances.sum()) if len(distances) else np.nan
+        metrics.append({
+            "canonical_id": pid,
+            "original_track_ids": ";".join(map(str, sorted(g["mixsort_id"].dropna().unique()))) if "mixsort_id" in g else "",
+            "observations": int(len(g)),
+            "valid_physical_coordinate_observations": int(g["physical_coordinate_valid"].sum()),
+            "physical_coordinate_coverage": float(g["physical_coordinate_valid"].mean()),
+            "within_pitch_bounds_fraction": float(g["within_nominal_pitch_bounds"].mean()),
+            "duration_seconds": duration,
+            "distance_travelled_m_estimate": total,
+            "average_speed_mps_estimate": total / duration if duration > 0 and np.isfinite(total) else np.nan,
+            "mean_step_speed_mps_estimate": float(speeds.mean()) if len(speeds) else np.nan,
+            "median_step_speed_mps_estimate": float(speeds.median()) if len(speeds) else np.nan,
+            "maximum_step_speed_mps_estimate": float(speeds.max()) if len(speeds) else np.nan,
+            "p95_step_speed_mps_estimate": float(speeds.quantile(.95)) if len(speeds) else np.nan,
+            "accepted_movement_steps": int(len(distances)),
+            "speed_outlier_steps_flagged": int(g["speed_outlier_flag"].sum()),
+            "mean_detector_confidence": float(g["confidence"].mean()) if "confidence" in g else np.nan,
+            "calibration_gap_median_seconds": float(g["calibration_gap_seconds"].median()),
+            "calibration_reprojection_error_median": float(g["calibration_rep_err"].median()),
+            "metrics_status": ("estimate_low_coverage" if g["physical_coordinate_valid"].mean() < .5
+                               else "estimate_review_outliers" if g["speed_outlier_flag"].sum()
+                               else "estimate_unvalidated_calibration")
+        })
+    metrics = pd.DataFrame(metrics)
+    points_path = out_dir / f"{a.video_id}_stitched_physical_tracks.csv"
+    metrics_path = out_dir / f"{a.video_id}_player_physical_metrics.csv"
+    audit_path = out_dir / f"{a.video_id}_physical_metrics_audit.json"
+    df.to_csv(points_path, index=False)
+    metrics.to_csv(metrics_path, index=False)
+    audit = {
+        "video_id": a.video_id, "input_tracks": str(tracks_path),
+        "calibration_parameter_directory": str(params_dir),
+        "point_output": str(points_path), "player_metrics_output": str(metrics_path),
+        "input_rows": int(len(df)), "canonical_players": int(df["canonical_id"].nunique()),
+        "calibration_samples_loaded": int(len(calibrations)),
+        "calibration_time_range_seconds": [float(calibrations[0]["time"]), float(calibrations[-1]["time"])],
+        "valid_coordinate_rows": int(df["physical_coordinate_valid"].sum()),
+        "valid_coordinate_fraction": float(df["physical_coordinate_valid"].mean()),
+        "rows_within_nominal_pitch_bounds": int(df["within_nominal_pitch_bounds"].sum()),
+        "speed_outlier_steps_flagged": int(df["speed_outlier_flag"].sum()),
+        "units": {"pitch_x_m": "metres from pitch corner", "pitch_y_m": "metres from pitch corner",
+                  "step_distance_m": "metres", "step_speed_mps": "metres per second"},
+        "warnings": [
+            "Metrics are estimates; saved PnLCalib parameters are not independently validated.",
+            "Each observation uses the nearest saved camera calibration sample in time.",
+            "Player ground contact is approximated by bounding-box bottom-centre.",
+            "Only consecutive observations separated by at most 0.5 seconds contribute to movement distance/speed.",
+            f"Speeds above {a.max_plausible_speed_mps} m/s are flagged and excluded from aggregate distance, but retained in point-level data.",
+            "Coordinates outside the 105 x 68 m nominal pitch are retained and flagged, not clipped.",
+            "Assumes camera parameters and tracking coordinates share the same image coordinate system."
+        ]
+    }
+    audit_path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
+    print("\n=== PHYSICAL METRICS COMPLETE ===")
+    print(f"Rows: {len(df)} | canonical IDs: {df.canonical_id.nunique()} | calibration samples: {len(calibrations)}")
+    print(f"Valid projected coordinates: {audit['valid_coordinate_rows']} ({audit['valid_coordinate_fraction']:.1%})")
+    print(f"Speed outlier steps flagged: {audit['speed_outlier_steps_flagged']}")
+    print(f"Point-level CSV: {points_path}")
+    print(f"Player metrics:  {metrics_path}")
+    print(f"Audit JSON:      {audit_path}")
+    print("Reminder: approximate metres/m/s, not validated tracking-grade measurements.")
+
+if __name__ == "__main__":
+    main()
