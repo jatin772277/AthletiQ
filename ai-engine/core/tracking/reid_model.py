@@ -4,8 +4,10 @@ from pathlib import Path
 import cv2
 import numpy as np
 import torch
-import torch.nn.functional as F
-import torchreid
+try:
+    import torchreid
+except ImportError:
+    torchreid = None
 
 
 class OSNetReID:
@@ -38,9 +40,11 @@ class OSNetReID:
                 f"Re-ID checkpoint not found: {self.checkpoint_path}"
             )
 
-        # ---------------------------------------------------------
-        # Build OSNet
-        # ---------------------------------------------------------
+        if torchreid is None:
+            raise ImportError(
+                "torchreid is required to initialize OSNetReID, but it is not installed. "
+                "Please install torchreid in your environment."
+            )
 
         self.model = torchreid.models.build_model(
             name="osnet_x1_0",
