@@ -65,6 +65,9 @@ def main():
     )
     args = parser.parse_args()
 
+    args.video = args.video.resolve()
+    args.output = args.output.resolve()
+
     if not args.video.is_file():
         raise FileNotFoundError(f"Video not found: {args.video}")
 
