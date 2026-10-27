@@ -1,0 +1,16 @@
+
+tracker:
+  name: MixSort
+  track_thresh: 0.1
+  track_buffer: 30
+  match_thresh: 0.9
+  iou_thresh: 0.3
+  alpha: 0.8
+detector:
+  confidence: 0.4
+  nms_iou: 0.4
+evaluation:
+  matching_iou: 0.5
+model:
+  architecture: mixformer_deit
+  checkpoint: /mnt/d/My Projects/AthletiQ/AthletiQ/ai-engine/third_party/MixSort/pretrained/MixFormer_sports_train.pth.tar
