@@ -1,0 +1,10 @@
+LICENSE
+README.md
+ellipse.py
+setup.cfg
+setup.py
+lsq_ellipse.egg-info/PKG-INFO
+lsq_ellipse.egg-info/SOURCES.txt
+lsq_ellipse.egg-info/dependency_links.txt
+lsq_ellipse.egg-info/requires.txt
+lsq_ellipse.egg-info/top_level.txt
