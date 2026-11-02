@@ -28,6 +28,7 @@ env/
 # ==============================
 
 .env
+backend/.jwt_secret
 .env.*
 !.env.example
 
@@ -54,6 +55,7 @@ datasets/*/annotations/*
 # ==============================
 
 outputs/*
+uploads/
 experiments/*
 
 # ==============================
@@ -144,3 +146,17 @@ ai-engine/notebooks/PnLCalib/SV_lines
 **/__pycache__/
 *.pyc
 .claude/settings.local.json
+
+# Model weights and pretrained checkpoints
+*.pt
+*.pth
+*.pth.tar
+*.onnx
+
+# Generated pipeline artifacts
+**/outputs/
+**/uploads/
+**/datasets/
+
+# Local Claude configuration
+.claude/

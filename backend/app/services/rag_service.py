@@ -1,45 +1,44 @@
-"""Tactical RAG Query Service for AthletiQ powered by Google Gemini API."""
+"""Tactical RAG Query Service for AthletiQ powered by Groq."""
 
 from __future__ import annotations
 import json
 import os
 from typing import Any, Optional
-from dotenv import load_dotenv
-
-# Load environment variables from .env if present
-load_dotenv()
 
 from backend.app.services.data_loader import data_loader
 
-# Check for google-genai SDK
+# The Groq client is OpenAI-compatible but keeps its own lightweight SDK.
 try:
-    from google import genai
-    from google.genai import types
-    GENAI_AVAILABLE = True
+    from groq import Groq
+    GROQ_AVAILABLE = True
 except ImportError:
-    GENAI_AVAILABLE = False
+    GROQ_AVAILABLE = False
 
 
 class RAGQueryService:
     def __init__(self):
-        self.api_key = os.getenv("GEMINI_API_KEY")
+        self.external_llm_enabled = os.getenv("ATHLETIQ_DISABLE_EXTERNAL_LLM", "").lower() not in {"1", "true", "yes"}
+        self.api_key = os.getenv("GROQ_API_KEY") if self.external_llm_enabled else None
         self.client = None
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
+        self.model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
 
-        if GENAI_AVAILABLE and self.api_key:
+        if GROQ_AVAILABLE and self.api_key:
             try:
-                self.client = genai.Client(api_key=self.api_key)
+                self.client = Groq(api_key=self.api_key)
             except Exception as e:
-                print(f"[RAG] Warning: Could not initialize Gemini client: {e}")
+                print(f"[RAG] Warning: Could not initialize Groq client: {e}")
                 self.client = None
 
-    def _call_gemini_llm(self, query: str, context_json_str: str) -> Optional[str]:
+    def _call_groq_llm(self, query: str, context_json_str: str) -> Optional[str]:
         # Refresh key if set at runtime
+        if not self.external_llm_enabled:
+            return None
+
         if not self.client:
-            self.api_key = os.getenv("GEMINI_API_KEY")
-            if GENAI_AVAILABLE and self.api_key:
+            self.api_key = os.getenv("GROQ_API_KEY")
+            if GROQ_AVAILABLE and self.api_key:
                 try:
-                    self.client = genai.Client(api_key=self.api_key)
+                    self.client = Groq(api_key=self.api_key)
                 except Exception:
                     self.client = None
 
@@ -63,18 +62,18 @@ class RAGQueryService:
         )
 
         try:
-            response = self.client.models.generate_content(
+            response = self.client.chat.completions.create(
                 model=self.model_name,
-                contents=user_content,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.25,
-                ),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                temperature=0.25,
             )
-            return response.text
+            return response.choices[0].message.content
         except Exception as e:
-            # Fallback to next model or report error
-            print(f"[RAG] Gemini API call failed: {e}. Falling back to deterministic engine.")
+            # A provider failure must never prevent users from receiving a data-grounded answer.
+            print(f"[RAG] Groq API call failed: {e}. Falling back to deterministic engine.")
             return None
 
     def answer_query(self, match_id: str, query: str, player_id: Optional[int] = None, team: Optional[str] = None) -> dict[str, Any]:
@@ -107,13 +106,13 @@ class RAGQueryService:
 
         context_json_str = json.dumps(context_data, indent=2)
 
-        # 1. Try Gemini LLM if API key is configured
-        llm_answer = self._call_gemini_llm(query=query, context_json_str=context_json_str)
+        # 1. Try Groq LLM if API key is configured.
+        llm_answer = self._call_groq_llm(query=query, context_json_str=context_json_str)
         if llm_answer:
             return {
                 "query": query,
                 "answer": llm_answer,
-                "llm_engine": f"Google Gemini ({self.model_name})",
+                "llm_engine": f"Groq ({self.model_name})",
                 "sources_used": sources,
                 "context_data": context_data,
             }
@@ -137,7 +136,7 @@ class RAGQueryService:
             return {
                 "query": query,
                 "answer": fallback_ans,
-                "llm_engine": "AthletiQ Deterministic Engine (Offline / Standby for Gemini API Key)",
+                "llm_engine": "AthletiQ Deterministic Engine (Offline / Standby for Groq API Key)",
                 "sources_used": sources,
                 "context_data": p_card,
             }
@@ -145,16 +144,20 @@ class RAGQueryService:
         if any(w in q_lower for w in ["possession", "touches", "control", "dominance"]):
             ta = match_summary["team_a"]
             tb = match_summary["team_b"]
+            lead, trail = ("Team A", "Team B") if ta["possession_pct"] >= tb["possession_pct"] else ("Team B", "Team A")
+            lead_t = (ta if lead == "Team A" else tb)["total_collective_touches"]
+            trail_t = (tb if lead == "Team A" else ta)["total_collective_touches"]
+            volume = f"{lead_t / trail_t:.1f}x the touch volume of {trail}" if trail_t else f"all {lead_t} recorded touches while {trail} registered none"
             ans = (
                 f"**Match Possession & Control Breakdown:**\n"
                 f"- **Team A:** {ta['possession_pct']}% possession ({ta['total_collective_touches']} touches, {ta['total_collective_distance_meters']:.1f} m covered, {ta['total_collective_sprints']} sprints)\n"
                 f"- **Team B:** {tb['possession_pct']}% possession ({tb['total_collective_touches']} touches, {tb['total_collective_distance_meters']:.1f} m covered, {tb['total_collective_sprints']} sprints)\n"
-                f"- **Tactical Summary:** Team A established aggressive sustained territorial dominance in the opposition half, generating 4x the touch volume of Team B."
+                f"- **Tactical Summary:** {lead} held more of the ball, generating {volume}."
             )
             return {
                 "query": query,
                 "answer": ans,
-                "llm_engine": "AthletiQ Deterministic Engine (Offline / Standby for Gemini API Key)",
+                "llm_engine": "AthletiQ Deterministic Engine (Offline / Standby for Groq API Key)",
                 "sources_used": [f"ball_possession/{match_id}_possession_summary.json"],
                 "context_data": match_summary,
             }
@@ -162,8 +165,8 @@ class RAGQueryService:
         # Default summary
         ans = (
             f"**AthletiQ Match Kinematics & Tactical Assessment ({match_id}):**\n"
-            f"- **Active Participants:** 32 verified canonical players (16 Team A, 16 Team B)\n"
-            f"- **Observation Retention:** 100.0% (7,215 / 7,215 observations preserved in responsible player buckets with 0% metric wastage)\n"
+            f"- **Active Participants:** {match_summary['total_active_players']} verified canonical players ({match_summary['team_a']['squad_size']} Team A, {match_summary['team_b']['squad_size']} Team B)\n"
+            f"- **Observation Retention:** {match_summary['observation_retention_pct']}% ({match_summary['total_raw_observations_preserved']:,} observations preserved in responsible player buckets with 0% metric wastage)\n"
             f"- **Possession:** Team A {match_summary['team_a']['possession_pct']}% vs Team B {match_summary['team_b']['possession_pct']}%\n"
             f"- **Distance Covered:** Team A {match_summary['team_a']['total_collective_distance_meters']:.1f} m vs Team B {match_summary['team_b']['total_collective_distance_meters']:.1f} m\n"
             f"- You can query specific player metrics by player ID (e.g. 'How did Player 14 perform?') or tactical topics (possession, work-rate, buckets)."
@@ -171,7 +174,7 @@ class RAGQueryService:
         return {
             "query": query,
             "answer": ans,
-            "llm_engine": "AthletiQ Deterministic Engine (Offline / Standby for Gemini API Key)",
+            "llm_engine": "AthletiQ Deterministic Engine (Offline / Standby for Groq API Key)",
             "sources_used": [f"rag_ready/{match_id}_match_and_player_metrics_for_rag.json"],
             "context_data": match_summary,
         }

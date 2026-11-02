@@ -11,8 +11,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from backend.app.main import app
+from backend.tests.helpers import register
 
 client = TestClient(app)
+client.headers["Authorization"] = f"Bearer {register(client)}"
 
 
 def test_health_check():
@@ -32,6 +34,8 @@ def test_list_matches():
     assert len(matches) >= 1
     match_ids = [m["match_id"] for m in matches]
     assert "football4" in match_ids
+    # Only demo matches and the user's own analyses are listed, not every outputs/ folder.
+    assert "ball_tracking" not in match_ids
 
 
 def test_match_summary():
@@ -174,3 +178,11 @@ def test_get_manifest():
     manifest = response.text
     assert "ATHLETIQ CENTRALIZED PIPELINE MANIFEST" in manifest
     assert "zero_wastage" in manifest.lower() or "zero wastage" in manifest.lower()
+
+
+def test_report_is_data_driven():
+    report = client.get("/api/matches/football4/report").json()["report_content"]
+    assert "Team A controlled the ball (80.1% possession, 137 touches)" in report
+    assert "Team A 1,528.38 m vs Team B 729.50 m" in report
+    assert "7,215 / 7,215" in report
+    assert "Workload Management" in report and "Compactness" in report

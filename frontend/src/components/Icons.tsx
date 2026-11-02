@@ -59,7 +59,17 @@ export const IconDownload = ({ size, ...p }: P) => (
   <svg {...base(size)} {...p}><path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" /></svg>
 );
 
-export const Logo = ({ size = 22 }: { size?: number }) => (
+export const IconUpload = ({ size, ...p }: P) => (
+  <svg {...base(size)} {...p}><path d="M12 16V4M7 8.5l5-5 5 5M5 20h14" /></svg>
+);
+export const IconFilm = ({ size, ...p }: P) => (
+  <svg {...base(size)} {...p}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4" /></svg>
+);
+export const IconLogout = ({ size, ...p }: P) => (
+  <svg {...base(size)} {...p}><path d="M9 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h3M14 16l4-4-4-4M18 12H8" /></svg>
+);
+
+export const Logo =({ size = 22 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 32 32" fill="currentColor">
     <path d="M5 26 14.5 5h3L27 26h-4.6l-2-4.6h-8.8L9.6 26H5Zm8.2-8.4h5.6L16 11l-2.8 6.6Z" />
   </svg>

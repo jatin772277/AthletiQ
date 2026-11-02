@@ -2,14 +2,19 @@
 """
 AthletiQ Complete Pipeline Outputs Consolidator & Enhancer
 ==========================================================
-Applies collective metrics and removed players bucket consolidation to
-outputs/testing_football4, resolving metric wastage and preparing rich,
-verified data structures for web development.
+Applies collective metrics and removed players bucket consolidation to a
+match output folder written by AthletiQ.py (default: outputs/testing_football4),
+resolving metric wastage and producing the schema v3 files the backend serves.
+
+Usage:
+  python apply_collective_improvements.py --output-dir outputs/user_matches/<id> --stem <id> --fps 25 --frames 750
 """
 
 from __future__ import annotations
+import argparse
 import json
 import math
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -19,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_ASSETS_DIR = Path(os.getenv("ATHLETIQ_MODEL_ASSETS_DIR", str(PROJECT_ROOT / "ai-engine" / "models"))).expanduser()
 if str(PROJECT_ROOT / "ai-engine") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "ai-engine"))
 if str(PROJECT_ROOT / "ai-engine" / "scripts") not in sys.path:
@@ -27,7 +33,14 @@ if str(PROJECT_ROOT / "ai-engine" / "scripts") not in sys.path:
 from compute_collective_metrics import compute_collective_player_metrics
 
 
-def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
+def enhance_match_outputs(
+    output_dir: Path,
+    stem: str = "football4",
+    fps: float = 30.0,
+    frames_analyzed: int = 750,
+    video_filename: str | None = None,
+) -> dict[str, Any]:
+    video_filename = video_filename or f"{stem}.mp4"
     dir_tracking = output_dir / "joint_tracking"
     dir_team = output_dir / "team_identification"
     dir_calib = output_dir / "calibration"
@@ -40,12 +53,12 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
     dir_rag = output_dir / "rag_ready"
 
     # 1. Load existing artifacts
-    raw_df = pd.read_csv(dir_tracking / "football4_player_tracks.csv")
-    ball_df = pd.read_csv(dir_tracking / "football4_ball_tracks.csv")
-    audit_json = json.load(open(dir_tracking / "football4_track_stitching_audit.json"))
-    stitched_tracks = pd.read_csv(dir_tracking / "football4_stitched_player_tracks.csv")
-    existing_phys = pd.read_csv(dir_physical / "football4_player_physical_metrics.csv")
-    spatial_df = pd.read_csv(dir_spatial / "football4_player_zone_occupancy.csv")
+    raw_df = pd.read_csv(dir_tracking / f"{stem}_player_tracks.csv")
+    ball_df = pd.read_csv(dir_tracking / f"{stem}_ball_tracks.csv")
+    audit_json = json.load(open(dir_tracking / f"{stem}_track_stitching_audit.json"))
+    stitched_tracks = pd.read_csv(dir_tracking / f"{stem}_stitched_player_tracks.csv")
+    existing_phys = pd.read_csv(dir_physical / f"{stem}_player_physical_metrics.csv")
+    spatial_df = pd.read_csv(dir_spatial / f"{stem}_player_zone_occupancy.csv")
 
     print("[ENHANCE] Computing collective metrics & assembling removed players bucket...")
     updated_phys_df, collective_df, buckets_json, match_summary = compute_collective_player_metrics(
@@ -53,13 +66,13 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
         ball_tracks_df=ball_df,
         stitching_audit=audit_json,
         stitched_metrics_df=existing_phys,
-        fps=30.0,
+        fps=fps,
     )
 
     # 2. Export updated physical metrics CSV & dedicated collective metrics CSV
-    path_phys_csv = dir_physical / "football4_player_physical_metrics.csv"
-    path_coll_csv = dir_physical / "football4_player_collective_metrics.csv"
-    path_bucket_json = dir_physical / "football4_removed_players_bucket.json"
+    path_phys_csv = dir_physical / f"{stem}_player_physical_metrics.csv"
+    path_coll_csv = dir_physical / f"{stem}_player_collective_metrics.csv"
+    path_bucket_json = dir_physical / f"{stem}_removed_players_bucket.json"
 
     updated_phys_df.to_csv(path_phys_csv, index=False)
     collective_df.to_csv(path_coll_csv, index=False)
@@ -67,7 +80,7 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
     print(f"[ENHANCE] Saved {path_phys_csv.name}, {path_coll_csv.name}, and {path_bucket_json.name}")
 
     # 3. Update Ball Possession Summary
-    path_poss = dir_possession / "football4_possession_summary.json"
+    path_poss = dir_possession / f"{stem}_possession_summary.json"
     player_touches_map = {str(row["canonical_id"]): int(row["collective_touches"]) for _, row in collective_df.iterrows()}
     
     total_touches = sum(player_touches_map.values())
@@ -92,7 +105,7 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
         "player_touches": player_touches_map,
     }
     path_poss.write_text(json.dumps(poss_data, indent=2), encoding="utf-8")
-    print(f"[ENHANCE] Saved updated possession summary ({total_touches} touches across 32 players)")
+    print(f"[ENHANCE] Saved updated possession summary ({total_touches} touches across {len(collective_df)} players)")
 
     # 4. Multi-Attribute Normalized DSA Priority Queue Ranking (Zero Ties)
     d = collective_df["collective_distance_meters"].to_numpy(dtype=float)
@@ -116,7 +129,7 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
     pq_df = pq_df.sort_values("dsa_activity_score_0_100", ascending=False).reset_index(drop=True)
     pq_df["dsa_rank"] = range(1, len(pq_df) + 1)
 
-    path_pq = dir_dsa / "football4_priority_queue_ranking.csv"
+    path_pq = dir_dsa / f"{stem}_priority_queue_ranking.csv"
     pq_cols = [
         "dsa_rank", "canonical_id", "team_label", "collective_distance_meters",
         "collective_sprint_count", "collective_touches", "collective_average_speed_mps",
@@ -146,12 +159,12 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
             "centroid": [float(sp.get("centroid_x_m", 52.5)), float(sp.get("centroid_y_m", 34.0))],
         }
 
-    path_hashmap = dir_dsa / "football4_player_lookup.json"
+    path_hashmap = dir_dsa / f"{stem}_player_lookup.json"
     path_hashmap.write_text(json.dumps(player_lookup, indent=2), encoding="utf-8")
     print(f"[ENHANCE] Saved updated DSA priority queue ranking & player lookup (no ties)")
 
     # 5. ML Performance Scoring with ExtraTrees
-    model_path = PROJECT_ROOT / "ai-engine/models/performance_scoring/performance_model.joblib"
+    model_path = MODEL_ASSETS_DIR / "performance_scoring/performance_model.joblib"
     model_pkg = joblib.load(model_path)
     ml_pipe = model_pkg["model"]
     feature_cols = model_pkg["feature_columns"]
@@ -171,7 +184,7 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
         elif col == "span_frames":
             pred_features[col] = collective_df["collective_observations"]
         elif col == "track_span_seconds":
-            pred_features[col] = collective_df["collective_observations"] / 30.0
+            pred_features[col] = collective_df["collective_observations"] / fps
         elif col == "experimental_sprint_count":
             pred_features[col] = collective_df["collective_sprint_count"]
         elif col == "experimental_sprint_distance_pixels":
@@ -185,7 +198,7 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
         "team_label": collective_df["team_label"],
         "extra_trees_score": np.clip(np.round(predicted_ml_scores, 2), 0.0, 100.0),
     })
-    path_ml = dir_ml / "football4_ml_player_scores.csv"
+    path_ml = dir_ml / f"{stem}_ml_player_scores.csv"
     ml_scores_df.to_csv(path_ml, index=False)
     print(f"[ENHANCE] Saved updated ML performance scores (range: {predicted_ml_scores.min():.1f}-{predicted_ml_scores.max():.1f})")
 
@@ -267,17 +280,27 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
         }
         player_cards.append(card)
 
+    team_a_count = int((collective_df["team_label"] == "team_a").sum())
+    team_b_count = int((collective_df["team_label"] == "team_b").sum())
+    total_players = len(collective_df)
+    total_obs = int(collective_df["collective_observations"].sum())
+    removed_total = int(collective_df["removed_players_count"].sum())
+    path_edges = dir_graph / f"{stem}_interaction_edges.csv"
+    edge_count = len(pd.read_csv(path_edges)) if path_edges.exists() else 0
+    ties = len(pq_df) - pq_df["dsa_activity_score_0_100"].nunique()
+    team_split = f"{team_a_count} Team A (IDs 1-{team_a_count}) + {team_b_count} Team B (IDs {team_a_count + 1}-{total_players})"
+
     rag_doc = {
         "metadata": {
             "schema_version": "3.0",
             "document_type": "athletiq_match_and_player_kinematics",
-            "video_id": "football4",
-            "video_filename": "football4.mp4",
-            "duration_analyzed_seconds": 25.0,
-            "total_frames_analyzed": 750,
+            "video_id": stem,
+            "video_filename": video_filename,
+            "duration_analyzed_seconds": round(frames_analyzed / fps, 2),
+            "total_frames_analyzed": int(frames_analyzed),
             "pitch_dimensions": "105m x 68m FIFA Standard",
-            "stitching_architecture": "Two-Part Team Stitching (16 Team A [IDs 1-16] + 16 Team B [IDs 17-32])",
-            "metric_preservation_policy": "Zero Wastage — All 160 removed tracklets metrics preserved into responsible canonical player buckets",
+            "stitching_architecture": f"Two-Part Team Stitching ({team_a_count} Team A [IDs 1-{team_a_count}] + {team_b_count} Team B [IDs {team_a_count + 1}-{total_players}])",
+            "metric_preservation_policy": f"Zero Wastage — All {removed_total} removed tracklets metrics preserved into responsible canonical player buckets",
             "outlier_clipping": "Enabled (speed capped at 10.5 m/s, boundaries [-3m, 108m] x [-3m, 71m])",
         },
         "match_level_analytics": {
@@ -286,9 +309,9 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
                 "team_b_percent": team_b_pct,
                 "contested_percent": poss_data["possession_split"]["contested_pct"],
             },
-            "total_active_players_tracked": 32,
-            "team_a_players_count": 16,
-            "team_b_players_count": 16,
+            "total_active_players_tracked": total_players,
+            "team_a_players_count": team_a_count,
+            "team_b_players_count": team_b_count,
             "team_a_collective_distance_meters": round(float(collective_df[collective_df["team_label"] == "team_a"]["collective_distance_meters"].sum()), 2),
             "team_b_collective_distance_meters": round(float(collective_df[collective_df["team_label"] == "team_b"]["collective_distance_meters"].sum()), 2),
             "match_total_collective_distance_meters": round(float(collective_df["collective_distance_meters"].sum()), 2),
@@ -298,7 +321,7 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
             "team_a_collective_touches": team_a_touches,
             "team_b_collective_touches": team_b_touches,
             "match_total_collective_touches": total_touches,
-            "total_raw_observations_preserved": int(collective_df["collective_observations"].sum()),
+            "total_raw_observations_preserved": total_obs,
             "observation_retention_pct": 100.0,
             "metric_wastage_pct": 0.0,
         },
@@ -317,51 +340,51 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
         "player_cards": player_cards,
     }
 
-    path_rag = dir_rag / "football4_match_and_player_metrics_for_rag.json"
+    path_rag = dir_rag / f"{stem}_match_and_player_metrics_for_rag.json"
     path_rag.write_text(json.dumps(rag_doc, indent=2), encoding="utf-8")
     print(f"[ENHANCE] Saved updated RAG document ({path_rag.stat().st_size / 1024:.1f} KB)")
 
     # 7. Update pipeline_execution_manifest.txt
     manifest_lines = [
         "=" * 85,
-        "ATHLETIQ CENTRALIZED PIPELINE MANIFEST — VIDEO: football4.mp4",
+        f"ATHLETIQ CENTRALIZED PIPELINE MANIFEST — VIDEO: {video_filename}",
         "Pipeline State: Zero Wastage Collective Metrics & Removed Players Bucket Verified",
-        "Team Architecture: 16 Team A (IDs 1-16) + 16 Team B (IDs 17-32)",
+        f"Team Architecture: {team_split}",
         "=" * 85,
         "",
-        "[PHASE 1 & 2] PLAYER & BALL TRACKING       | STATUS: SUCCESS  | 750 frames, 7215 raw player detections (192 raw tracks)",
-        "[PHASE 2.5]   TWO-PART TEAM STITCHING      | STATUS: SUCCESS  | Consolidated into 32 canonical players (16 Team A, 16 Team B)",
-        "[PHASE 3]     TEAM IDENTIFICATION          | STATUS: SUCCESS  | MobileNetV3 visual classification (16 Team A, 16 Team B)",
+        f"[PHASE 1 & 2] PLAYER & BALL TRACKING       | STATUS: SUCCESS  | {frames_analyzed} frames, {len(raw_df)} raw player detections ({raw_df['raw_track_id'].nunique()} raw tracks)",
+        f"[PHASE 2.5]   TWO-PART TEAM STITCHING      | STATUS: SUCCESS  | Consolidated into {total_players} canonical players ({team_a_count} Team A, {team_b_count} Team B)",
+        f"[PHASE 3]     TEAM IDENTIFICATION          | STATUS: SUCCESS  | MobileNetV3 visual classification ({team_a_count} Team A, {team_b_count} Team B)",
         "[PHASE 4 & 5] CALIBRATION & TRAJECTORIES   | STATUS: SUCCESS  | PnLCalib homography + athletic outlier clipping (<= 10.5 m/s)",
-        "[PHASE 6]     SPATIAL ANALYTICS            | STATUS: SUCCESS  | Zone occupancy (defensive, middle, attacking) calculated for 32 players",
-        f"[PHASE 7]     BALL POSSESSION & TOUCHES    | STATUS: SUCCESS  | 171 collective touches recovered (Team A {team_a_pct}% vs Team B {team_b_pct}%)",
-        "[PHASE 8]     PLAYER INTERACTION GRAPH     | STATUS: SUCCESS  | 96 proximity edges constructed",
-        "[PHASE 9]     DSA ENGINE (O(1) & Max-Heap) | STATUS: SUCCESS  | Normalized multi-attribute ranking with 0 ties across 32 players",
-        "[PHASE 10]    ML PERFORMANCE SCORING       | STATUS: SUCCESS  | ExtraTrees collective scores across all 32 players",
-        f"[PHASE 11]    COLLECTIVE METRICS & BUCKET  | STATUS: SUCCESS  | 100% observation retention (7215/7215), 0% metric wastage",
+        f"[PHASE 6]     SPATIAL ANALYTICS            | STATUS: SUCCESS  | Zone occupancy (defensive, middle, attacking) calculated for {total_players} players",
+        f"[PHASE 7]     BALL POSSESSION & TOUCHES    | STATUS: SUCCESS  | {total_touches} collective touches recovered (Team A {team_a_pct}% vs Team B {team_b_pct}%)",
+        f"[PHASE 8]     PLAYER INTERACTION GRAPH     | STATUS: SUCCESS  | {edge_count} proximity edges constructed",
+        f"[PHASE 9]     DSA ENGINE (O(1) & Max-Heap) | STATUS: SUCCESS  | Normalized multi-attribute ranking with {ties} ties across {total_players} players",
+        f"[PHASE 10]    ML PERFORMANCE SCORING       | STATUS: SUCCESS  | ExtraTrees collective scores across all {total_players} players",
+        f"[PHASE 11]    COLLECTIVE METRICS & BUCKET  | STATUS: SUCCESS  | 100% observation retention ({total_obs}/{total_obs}), 0% metric wastage",
         f"[PHASE 12]    RAG READY JSON PACKAGE       | STATUS: SUCCESS  | Exported {len(player_cards)} player cards with collective metrics & buckets",
         "",
         "=" * 85,
-        "COMPLETE SUMMARY OF GENERATED FILES IN outputs/testing_football4/:",
+        f"COMPLETE SUMMARY OF GENERATED FILES IN {output_dir.name}/:",
         "=" * 85,
-        "1.  Raw Player Tracking (CSV)   : joint_tracking/football4_player_tracks.csv",
-        "2.  Ball Tracking (CSV)         : joint_tracking/football4_ball_tracks.csv",
-        "3.  Stitched Tracks (32 IDs)    : joint_tracking/football4_stitched_player_tracks.csv",
-        "4.  Two-Team Stitching Audit    : joint_tracking/football4_track_stitching_audit.json",
-        "5.  Team Predictions (32 IDs)   : team_identification/football4_team_predictions.csv",
-        "6.  Pitch Calibration Audit     : calibration/football4_pitch_calibration_validation.json",
-        "7.  Clipped Physical Tracks     : physical_metrics/football4_validated_physical_tracks.csv",
-        "8.  Outlier Clipping Audit      : physical_metrics/football4_outlier_clipping_audit.json",
-        "9.  Player Physical Metrics     : physical_metrics/football4_player_physical_metrics.csv",
-        "10. Player Collective Metrics   : physical_metrics/football4_player_collective_metrics.csv",
-        "11. Removed Players Bucket JSON : physical_metrics/football4_removed_players_bucket.json",
-        "12. Spatial Zone Occupancy      : spatial_analytics/football4_player_zone_occupancy.csv",
-        "13. Ball Possession Summary     : ball_possession/football4_possession_summary.json",
-        "14. Interaction Graph Edges     : player_interaction_graph/football4_interaction_edges.csv",
-        "15. DSA HashMap Index           : dsa/football4_player_lookup.json",
-        "16. DSA PriorityQueue Rank      : dsa/football4_priority_queue_ranking.csv",
-        "17. ML Performance Scores       : performance_ml/football4_ml_player_scores.csv",
-        "18. RAG-Ready JSON Document     : rag_ready/football4_match_and_player_metrics_for_rag.json",
+        f"1.  Raw Player Tracking (CSV)   : joint_tracking/{stem}_player_tracks.csv",
+        f"2.  Ball Tracking (CSV)         : joint_tracking/{stem}_ball_tracks.csv",
+        f"3.  Stitched Tracks ({total_players} IDs)    : joint_tracking/{stem}_stitched_player_tracks.csv",
+        f"4.  Two-Team Stitching Audit    : joint_tracking/{stem}_track_stitching_audit.json",
+        f"5.  Team Predictions ({total_players} IDs)   : team_identification/{stem}_team_predictions.csv",
+        f"6.  Pitch Calibration Audit     : calibration/{stem}_pitch_calibration_validation.json",
+        f"7.  Clipped Physical Tracks     : physical_metrics/{stem}_validated_physical_tracks.csv",
+        f"8.  Outlier Clipping Audit      : physical_metrics/{stem}_outlier_clipping_audit.json",
+        f"9.  Player Physical Metrics     : physical_metrics/{stem}_player_physical_metrics.csv",
+        f"10. Player Collective Metrics   : physical_metrics/{stem}_player_collective_metrics.csv",
+        f"11. Removed Players Bucket JSON : physical_metrics/{stem}_removed_players_bucket.json",
+        f"12. Spatial Zone Occupancy      : spatial_analytics/{stem}_player_zone_occupancy.csv",
+        f"13. Ball Possession Summary     : ball_possession/{stem}_possession_summary.json",
+        f"14. Interaction Graph Edges     : player_interaction_graph/{stem}_interaction_edges.csv",
+        f"15. DSA HashMap Index           : dsa/{stem}_player_lookup.json",
+        f"16. DSA PriorityQueue Rank      : dsa/{stem}_priority_queue_ranking.csv",
+        f"17. ML Performance Scores       : performance_ml/{stem}_ml_player_scores.csv",
+        f"18. RAG-Ready JSON Document     : rag_ready/{stem}_match_and_player_metrics_for_rag.json",
         "=" * 85,
         "STATUS: ALL PHASES ENHANCED AND COMPLETED WITH ZERO METRIC WASTAGE",
         "=" * 85,
@@ -373,7 +396,25 @@ def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
     return match_summary
 
 
-if __name__ == "__main__":
-    out_dir = PROJECT_ROOT / "outputs/testing_football4"
-    summary = enhance_testing_football4_outputs(out_dir)
+# Backwards-compatible name used before the enhancer took a stem.
+def enhance_testing_football4_outputs(output_dir: Path) -> dict[str, Any]:
+    return enhance_match_outputs(output_dir)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Upgrade AthletiQ.py outputs to collective-metrics schema v3")
+    parser.add_argument("--output-dir", default="outputs/testing_football4", help="Match output folder (relative to project root or absolute)")
+    parser.add_argument("--stem", default="football4", help="Video stem used in output file names")
+    parser.add_argument("--fps", type=float, default=30.0, help="Video frame rate")
+    parser.add_argument("--frames", type=int, default=750, help="Number of frames analysed")
+    parser.add_argument("--video-filename", default=None, help="Original video file name for metadata")
+    args = parser.parse_args()
+    out_dir = Path(args.output_dir)
+    if not out_dir.is_absolute():
+        out_dir = PROJECT_ROOT / out_dir
+    enhance_match_outputs(out_dir, stem=args.stem, fps=args.fps, frames_analyzed=args.frames, video_filename=args.video_filename)
     print("\n[SUCCESS] Completed enhancement!")
+
+
+if __name__ == "__main__":
+    main()

@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ViewProps } from "../App";
-import { api } from "../api";
+import { api, type ApiError } from "../api";
 import { IconDownload } from "../components/Icons";
 import { ease } from "../components/Motion";
 
@@ -21,13 +21,19 @@ const components = { h2: reveal("h2"), h3: reveal("h3"), blockquote: reveal("blo
 
 export function Report({ matchId }: ViewProps) {
   const [md, setMd] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<ApiError | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
+    let cancelled = false;
     setMd(null);
     setErr(null);
-    api.report(matchId).then(setMd, (e) => setErr((e as Error).message));
-  }, [matchId]);
+    api.report(matchId).then(
+      (r) => !cancelled && setMd(r),
+      (e) => !cancelled && setErr(e as ApiError),
+    );
+    return () => { cancelled = true; };
+  }, [matchId, attempt]);
 
   const download = () => {
     if (!md) return;
@@ -46,7 +52,15 @@ export function Report({ matchId }: ViewProps) {
       </div>
       <div className="card report">
         {err ? (
-          <p className="tb">{err}</p>
+          <div className="report-error" role="alert">
+            <div className="eyebrow tb">{err.unreachable ? "Connection lost" : "Report unavailable"}</div>
+            <h3 style={{ margin: "6px 0 8px" }}>{err.unreachable ? "Can't reach the engine" : "The scouting report couldn't be generated"}</h3>
+            <p className="muted" style={{ margin: 0 }}>{err.message}</p>
+            {err.unreachable && (
+              <p className="muted" style={{ fontSize: 12.5 }}>Start the API with <code>python backend/run.py</code>, then retry.</p>
+            )}
+            <button className="btn-volt" style={{ height: 42, marginTop: 14 }} onClick={() => setAttempt((n) => n + 1)}>Retry</button>
+          </div>
         ) : !md ? (
           <div className="grid" style={{ gap: 14 }}>
             {[70, 40, 100, 90, 95, 60, 100, 80].map((w, i) => <div key={i} className="skeleton" style={{ height: i === 0 ? 40 : 16, width: `${w}%` }} />)}

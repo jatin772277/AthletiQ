@@ -21,6 +21,9 @@ class MatchDataLoader:
         candidate_2 = self.outputs_dir / match_id
         if candidate_2.exists():
             return candidate_2
+        candidate_3 = settings.user_outputs_dir / match_id
+        if candidate_3.exists():
+            return candidate_3
         # Default fallback
         return settings.default_match_output_dir
 

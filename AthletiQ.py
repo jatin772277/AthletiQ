@@ -53,6 +53,7 @@ from ultralytics import YOLO
 
 # Project root setup
 PROJECT_ROOT = Path(__file__).resolve().parent
+MODEL_ASSETS_DIR = Path(os.getenv("ATHLETIQ_MODEL_ASSETS_DIR", str(PROJECT_ROOT / "ai-engine" / "models"))).expanduser()
 if str(PROJECT_ROOT / "ai-engine") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "ai-engine"))
 if str(PROJECT_ROOT / "ai-engine" / "scripts") not in sys.path:
@@ -148,8 +149,8 @@ class AthletiQMasterPipeline:
             return p_df, b_df
 
         print("\n--- [PHASE 1 & 2] Running Player & Ball Tracking (YOLOv8 + MixSort) ---")
-        player_model_path = PROJECT_ROOT / "ai-engine/models/football_player_detector.pt"
-        ball_model_path = PROJECT_ROOT / "ai-engine/models/athletiq_ball_detector_champion_1280.pt"
+        player_model_path = MODEL_ASSETS_DIR / "football_player_detector.pt"
+        ball_model_path = MODEL_ASSETS_DIR / "athletiq_ball_detector_champion_1280.pt"
 
         player_model = YOLO(str(player_model_path))
         ball_model = YOLO(str(ball_model_path))
@@ -252,7 +253,7 @@ class AthletiQMasterPipeline:
         path_team_preds = self.dir_team / f"{self.video_path.stem}_team_predictions.csv"
 
         # 1. Classify raw tracklets by jersey visual profile (MobileNetV3 + Torso Color)
-        team_model_path = PROJECT_ROOT / "ai-engine/models/team_identification/best_team_classifier.pt"
+        team_model_path = MODEL_ASSETS_DIR / "team_identification/best_team_classifier.pt"
         device_obj = torch.device(f"cuda:{self.device}" if torch.cuda.is_available() and self.device != "cpu" else "cpu")
 
         checkpoint = torch.load(team_model_path, map_location="cpu", weights_only=True)
@@ -605,7 +606,7 @@ class AthletiQMasterPipeline:
         t0 = time.time()
         print("\n--- [PHASE 10] Running Trained ExtraTrees ML Performance Scoring Model ---")
         path_ml_scores = self.dir_ml / f"{self.video_path.stem}_ml_player_scores.csv"
-        model_path = PROJECT_ROOT / "ai-engine/models/performance_scoring/performance_model.joblib"
+        model_path = MODEL_ASSETS_DIR / "performance_scoring/performance_model.joblib"
 
         model_pkg = joblib.load(model_path)
         ml_pipe = model_pkg["model"]

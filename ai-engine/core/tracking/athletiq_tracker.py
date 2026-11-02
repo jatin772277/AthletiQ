@@ -1,6 +1,7 @@
 
 from pathlib import Path
 from typing import Optional
+import os
 
 from .mixsort_tracker import AthletiQMixSort
 from .track_stitcher import TrackStitcher
@@ -45,10 +46,12 @@ class AthletiQTracker:
 
         # Re-ID is optional. Do not try to load a missing checkpoint.
         if reid_checkpoint is None:
+            model_assets = Path(os.getenv(
+                "ATHLETIQ_MODEL_ASSETS_DIR",
+                str(self.project_root / "ai-engine" / "models"),
+            )).expanduser()
             default_checkpoint = (
-                self.project_root
-                / "ai-engine"
-                / "models"
+                model_assets
                 / "reid"
                 / "osnet_x1_0_msmt17_combineall.pth"
             )
