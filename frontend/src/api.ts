@@ -131,14 +131,31 @@ export const api = {
   ask: (id: string, query: string) => request<TacticalAnswer>(`/api/matches/${id}/tactical-query`, json({ query })),
   bundle: async (id: string): Promise<MatchBundle> => {
     const m = `/api/matches/${id}`;
-    const [summary, players, rankings, possession, graph, manifest] = await Promise.all([
+    const [summary, players] = await Promise.all([
       request<MatchSummary>(`${m}/summary`),
       request<PlayerCard[]>(`${m}/players`),
+    ]);
+    const [rankingsRes, possessionRes, graphRes, manifestRes] = await Promise.allSettled([
       request<RankingItem[]>(`${m}/rankings`),
       request<Possession>(`${m}/possession`),
       request<InteractionGraph>(`${m}/interaction-graph`),
       request<string>(`${m}/manifest`, {}, true),
     ]);
+    const rankings = rankingsRes.status === "fulfilled" ? rankingsRes.value : [];
+    const possession: Possession = possessionRes.status === "fulfilled" ? possessionRes.value : {
+      match_id: id,
+      possession_split: { team_a_percent: summary.team_a.possession_pct, team_b_percent: summary.team_b.possession_pct },
+      touches_summary: { team_a_touches: summary.team_a.total_collective_touches, team_b_touches: summary.team_b.total_collective_touches },
+      player_touches: {},
+    };
+    const graph: InteractionGraph = graphRes.status === "fulfilled" ? graphRes.value : {
+      match_id: id,
+      total_nodes: players.length,
+      total_edges: 0,
+      edges: [],
+    };
+    const manifest = manifestRes.status === "fulfilled" ? manifestRes.value : `Pipeline analysis package for ${id}`;
+
     return { summary, players, rankings, possession, graph, manifest };
   },
 };

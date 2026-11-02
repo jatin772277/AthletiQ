@@ -60,7 +60,7 @@ export function Upload({ onQueued, goAnalyses }: { onQueued: (job: Job) => void;
   };
 
   // Without a preview the length is unknown; the server clamps the window to the real video length.
-  const maxLen = noPreview ? 600 : Math.max(1, Math.floor(duration - start));
+  const maxLen = noPreview ? 2700 : Math.max(1, Math.floor(duration - start));
   const clip = Math.min(length, maxLen);
   const ready = noPreview || duration > 0;
 
@@ -184,7 +184,7 @@ export function Upload({ onQueued, goAnalyses }: { onQueued: (job: Job) => void;
               </label>
               <label className="field">
                 <span>Analyse <b className="volt">{clip}s</b> of play</span>
-                <input type="range" min={1} max={Math.min(maxLen, 300)} step={1} value={clip} onChange={(e) => setLength(Number(e.target.value))} />
+                <input type="range" min={1} max={Math.min(maxLen, 2700)} step={1} value={clip} onChange={(e) => setLength(Number(e.target.value))} />
               </label>
               </>)}
               <p className="muted" style={{ fontSize: 12, margin: 0 }}>

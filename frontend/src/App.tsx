@@ -4,6 +4,7 @@ import { api, session, type ApiError } from "./api";
 import { IconFilm, IconLogout, IconOverview, IconPitch, IconPlayers, IconReport, IconSpark, IconTrophy, IconUpload, Logo } from "./components/Icons";
 import { ease } from "./components/Motion";
 import { PlayerDrawer } from "./components/PlayerDrawer";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import type { MatchBundle, MatchListItem, User } from "./types";
 import { Analyses } from "./views/Analyses";
 import { Assistant } from "./views/Assistant";
@@ -92,8 +93,15 @@ function Dashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  const loadMatches = useCallback(async (select?: string) => {
+  const switchMatch = useCallback((id: string) => {
+    setPlayer(null);
+    setData(null);
     setError(null);
+    setMatchId(id);
+    setReloadVersion((v) => v + 1);
+  }, []);
+
+  const loadMatches = useCallback(async (select?: string) => {
     try {
       const [health, list] = await Promise.all([api.health(), api.matches()]);
       setOnline(health.database === "connected");
@@ -130,8 +138,17 @@ function Dashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
     setData(null);
     setError(null);
     api.bundle(matchId).then(
-      (b) => !cancelled && setData(b),
-      (e) => !cancelled && setError((e as Error).message),
+      (b) => {
+        if (!cancelled) {
+          setData(b);
+          setError(null);
+        }
+      },
+      (e) => {
+        if (!cancelled) {
+          setError((e as Error).message);
+        }
+      },
     );
     return () => { cancelled = true; };
   }, [matchId, reloadVersion]);
@@ -143,24 +160,30 @@ function Dashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
   };
 
   const openAnalysis = async (id: string) => {
+    switchMatch(id);
     await loadMatches(id);
     go("overview");
   };
 
   const def: ViewDef = VIEWS[view];
   const [t1, t2] = def.title;
-  const selected = player != null ? data?.players.find((p) => p.player_id === player) : undefined;
+  const isDataMatching = data && (data.summary.match_id === matchId || matchId.includes(data.summary.match_id));
+  const selected = player != null && isDataMatching ? data?.players.find((p) => p.player_id === player) : undefined;
   const current = matches?.find((m) => m.match_id === matchId);
 
   let body;
   if (view === "upload") body = <Upload onQueued={() => loadMatches()} goAnalyses={() => go("analyses")} />;
   else if (view === "analyses") body = <Analyses onOpen={openAnalysis} goUpload={() => go("upload")} onCompleted={() => loadMatches()} />;
-  else if (error) body = <ErrorState message={error} retry={retryConnection} goAnalyses={() => go("analyses")} goUpload={() => go("upload")} />;
+  else if (error) body = <ErrorState message={error} retry={retryConnection} goAnalyses={() => go("analyses")} goUpload={() => go("upload")} onSwitchMatch={matches && matches.length > 0 ? switchMatch : undefined} demoMatchId={matches?.find((m) => m.is_demo)?.match_id} />;
   else if (matches && matches.length === 0) body = <NoMatches goUpload={() => go("upload")} />;
-  else if (!data) body = <LoadingState />;
+  else if (!data || !isDataMatching) body = <LoadingState />;
   else {
     const View = def.comp!;
-    body = <View matchId={matchId} data={data} openPlayer={setPlayer} go={go} />;
+    body = (
+      <ErrorBoundary key={matchId} onReset={() => setReloadVersion((v) => v + 1)}>
+        <View matchId={matchId} data={data} openPlayer={setPlayer} go={go} />
+      </ErrorBoundary>
+    );
   }
 
   const initials = user.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
@@ -220,7 +243,7 @@ function Dashboard({ user, onSignOut }: { user: User; onSignOut: () => void }) {
             <div className="topbar-right">
               {def.group === "analytics" && data && <span className="chip live"><span className="status-dot" />Analysis complete</span>}
               {def.group === "analytics" && matches && matches.length > 0 && (
-                <select className="select" value={matchId} onChange={(e) => setMatchId(e.target.value)} aria-label="Select match">
+                <select className="select" value={matchId} onChange={(e) => switchMatch(e.target.value)} aria-label="Select match">
                   {matches.some((m) => !m.is_demo) && (
                     <optgroup label="My analyses">
                       {matches.filter((m) => !m.is_demo).map((m) => <option key={m.match_id} value={m.match_id}>{m.title}</option>)}
@@ -286,7 +309,21 @@ function NoMatches({ goUpload }: { goUpload: () => void }) {
   );
 }
 
-function ErrorState({ message, retry, goAnalyses, goUpload }: { message: string; retry: () => void; goAnalyses?: () => void; goUpload?: () => void }) {
+function ErrorState({
+  message,
+  retry,
+  goAnalyses,
+  goUpload,
+  onSwitchMatch,
+  demoMatchId,
+}: {
+  message: string;
+  retry: () => void;
+  goAnalyses?: () => void;
+  goUpload?: () => void;
+  onSwitchMatch?: (id: string) => void;
+  demoMatchId?: string;
+}) {
   const isConnection = /cannot reach|failed to fetch|network|connection lost/i.test(message);
   return (
     <div className="center-state">
@@ -301,8 +338,11 @@ function ErrorState({ message, retry, goAnalyses, goUpload }: { message: string;
         ) : (
           <p className="muted" style={{ fontSize: 12.5 }}>The match data may still be processing or was not found.</p>
         )}
-        <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
+        <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
           <button className="btn-volt" style={{ height: 42 }} onClick={retry}>Retry</button>
+          {!isConnection && demoMatchId && onSwitchMatch && (
+            <button className="btn-ghost" style={{ height: 42 }} onClick={() => onSwitchMatch(demoMatchId)}>Switch to Demo</button>
+          )}
           {goAnalyses && <button className="btn-ghost" style={{ height: 42 }} onClick={goAnalyses}>My Analyses</button>}
           {goUpload && <button className="btn-ghost" style={{ height: 42 }} onClick={goUpload}>Upload match</button>}
         </div>

@@ -11,9 +11,7 @@ router = APIRouter(prefix="/api/matches", tags=["Removed Players Bucket"])
 @router.get("/{match_id}/buckets", summary="Get all removed player buckets across all 32 players")
 def get_all_buckets(match_id: str) -> dict[str, Any]:
     buckets = data_loader.get_removed_players_bucket(match_id)
-    if not buckets:
-        raise HTTPException(status_code=404, detail=f"No buckets found for match '{match_id}'")
-    return buckets
+    return buckets or {}
 
 
 @router.get("/{match_id}/buckets/{player_id}", summary="Get the absorbed tracklets bucket for a responsible player")

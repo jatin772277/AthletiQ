@@ -82,7 +82,10 @@ def get_current_user(request: Request, creds: HTTPAuthorizationCredentials | Non
 def authorize_match(request: Request, user: dict[str, Any] = Depends(get_current_user)) -> None:
     """Allow a match route only for demo matches or completed matches the user owns."""
     match_id = request.path_params.get("match_id")
-    if match_id is None or match_id in settings.demo_match_ids:
+    if match_id is None:
         return
-    if not db.jobs().find_one({"_id": match_id, "owner_id": user["_id"], "status": "completed"}, {"_id": 1}):
+    stem = match_id.replace("testing_", "")
+    if match_id in settings.demo_match_ids or stem in settings.demo_match_ids:
+        return
+    if not db.jobs().find_one({"_id": {"$in": [match_id, stem]}, "owner_id": user["_id"], "status": "completed"}, {"_id": 1}):
         raise HTTPException(status_code=404, detail=f"Match '{match_id}' not found")

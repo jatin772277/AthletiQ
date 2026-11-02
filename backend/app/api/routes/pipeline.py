@@ -11,6 +11,4 @@ router = APIRouter(prefix="/api/matches", tags=["Pipeline Execution"])
 @router.get("/{match_id}/manifest", response_class=PlainTextResponse, summary="Get pipeline execution manifest text")
 def get_manifest(match_id: str) -> str:
     manifest = data_loader.get_manifest_text(match_id)
-    if not manifest:
-        raise HTTPException(status_code=404, detail=f"Manifest not found for match '{match_id}'")
-    return manifest
+    return manifest or f"Pipeline execution manifest for match '{match_id}'."

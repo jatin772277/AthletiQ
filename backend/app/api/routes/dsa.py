@@ -12,9 +12,7 @@ router = APIRouter(prefix="/api/matches", tags=["DSA Engine"])
 @router.get("/{match_id}/rankings", response_model=list[DSARankingItem], summary="Get PriorityQueue activity rankings (1 to 32)")
 def get_dsa_rankings(match_id: str):
     rankings = data_loader.get_dsa_rankings(match_id)
-    if not rankings:
-        raise HTTPException(status_code=404, detail=f"No rankings found for match '{match_id}'")
-    return rankings
+    return rankings or []
 
 
 @router.get("/{match_id}/lookup/{player_id}", summary="Get O(1) DSA HashMap lookup item for player")
