@@ -13,19 +13,33 @@ class MatchDataLoader:
         self.outputs_dir = outputs_dir or settings.outputs_dir
         self._cache: dict[str, dict[str, Any]] = {}
 
-    def get_match_dir(self, match_id: str) -> Path:
-        # Check standard matching patterns: testing_{match_id} or {match_id}
-        candidate_1 = self.outputs_dir / f"testing_{match_id}"
+    def get_match_dir(self, match_id: str) -> Optional[Path]:
+        stem = match_id.replace("testing_", "")
+        # 1. Look in user matches first (for uploaded matches)
+        candidate_u1 = settings.user_outputs_dir / stem
+        if candidate_u1.exists():
+            return candidate_u1
+        candidate_u2 = settings.user_outputs_dir / match_id
+        if candidate_u2.exists():
+            return candidate_u2
+
+        # 2. Check standard matching patterns in outputs_dir
+        candidate_1 = self.outputs_dir / f"testing_{stem}"
         if candidate_1.exists():
             return candidate_1
-        candidate_2 = self.outputs_dir / match_id
+        candidate_2 = self.outputs_dir / stem
         if candidate_2.exists():
             return candidate_2
-        candidate_3 = settings.user_outputs_dir / match_id
+        candidate_3 = self.outputs_dir / match_id
         if candidate_3.exists():
             return candidate_3
-        # Default fallback
-        return settings.default_match_output_dir
+
+        # 3. Demo match fallback
+        if stem in settings.demo_match_ids or match_id in settings.demo_match_ids:
+            if settings.default_match_output_dir.exists():
+                return settings.default_match_output_dir
+
+        return None
 
     def get_available_matches(self) -> list[dict[str, Any]]:
         matches = []
@@ -33,25 +47,29 @@ class MatchDataLoader:
             return matches
 
         for item in self.outputs_dir.iterdir():
-            if item.is_dir():
+            if item.is_dir() and item.name != "user_matches":
                 stem = item.name.replace("testing_", "")
                 rag_file = item / "rag_ready" / f"{stem}_match_and_player_metrics_for_rag.json"
                 manifest_file = item / "pipeline_execution_manifest.txt"
-                has_rag = rag_file.exists()
-                matches.append({
-                    "match_id": stem,
-                    "folder_name": item.name,
-                    "status": "COMPLETED" if has_rag else "IN_PROGRESS",
-                    "has_rag_package": has_rag,
-                    "has_manifest": manifest_file.exists(),
-                    "path": str(item),
-                })
+                has_rag = rag_file.exists() or bool(list((item / "rag_ready").glob("*metrics_for_rag.json"))) if (item / "rag_ready").exists() else False
+                if has_rag:
+                    matches.append({
+                        "match_id": stem,
+                        "folder_name": item.name,
+                        "status": "COMPLETED",
+                        "has_rag_package": True,
+                        "has_manifest": manifest_file.exists(),
+                        "path": str(item),
+                    })
         return matches
 
     def load_match_data(self, match_id: str) -> dict[str, Any]:
         match_dir = self.get_match_dir(match_id)
+        if not match_dir or not match_dir.exists():
+            raise FileNotFoundError(f"Match directory not found for match '{match_id}'")
+
         stem = match_id.replace("testing_", "")
-        cache_key = f"{stem}_{match_dir.stat().st_mtime if match_dir.exists() else 0}"
+        cache_key = f"{stem}_{match_dir.stat().st_mtime}"
 
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -70,53 +88,97 @@ class MatchDataLoader:
             "manifest_text": "",
         }
 
+        # Helper to find file by stem or first match in folder
+        def _find_file(sub: str, filename_exact: str, glob_pattern: str) -> Optional[Path]:
+            p = match_dir / sub / filename_exact
+            if p.exists():
+                return p
+            cand = list((match_dir / sub).glob(glob_pattern)) if (match_dir / sub).exists() else []
+            return cand[0] if cand else None
+
         # 1. RAG document
-        path_rag = match_dir / "rag_ready" / f"{stem}_match_and_player_metrics_for_rag.json"
-        if path_rag.exists():
-            data["rag_doc"] = json.loads(path_rag.read_text(encoding="utf-8"))
+        path_rag = _find_file("rag_ready", f"{stem}_match_and_player_metrics_for_rag.json", "*metrics_for_rag.json")
+        if path_rag:
+            try:
+                data["rag_doc"] = json.loads(path_rag.read_text(encoding="utf-8"))
+            except Exception:
+                pass
 
         # 2. Buckets JSON
-        path_buckets = match_dir / "physical_metrics" / f"{stem}_removed_players_bucket.json"
-        if path_buckets.exists():
-            data["buckets"] = json.loads(path_buckets.read_text(encoding="utf-8"))
+        path_buckets = _find_file("physical_metrics", f"{stem}_removed_players_bucket.json", "*removed_players_bucket.json")
+        if path_buckets:
+            try:
+                data["buckets"] = json.loads(path_buckets.read_text(encoding="utf-8"))
+            except Exception:
+                pass
 
         # 3. Collective Metrics CSV
-        path_coll = match_dir / "physical_metrics" / f"{stem}_player_collective_metrics.csv"
-        if path_coll.exists():
-            data["collective_df"] = pd.read_csv(path_coll)
+        path_coll = _find_file("physical_metrics", f"{stem}_player_collective_metrics.csv", "*player_collective_metrics.csv")
+        if path_coll:
+            try:
+                data["collective_df"] = pd.read_csv(path_coll)
+            except Exception:
+                pass
 
         # 4. Physical Metrics CSV
-        path_phys = match_dir / "physical_metrics" / f"{stem}_player_physical_metrics.csv"
-        if path_phys.exists():
-            data["physical_df"] = pd.read_csv(path_phys)
+        path_phys = _find_file("physical_metrics", f"{stem}_player_physical_metrics.csv", "*player_physical_metrics.csv")
+        if path_phys:
+            try:
+                data["physical_df"] = pd.read_csv(path_phys)
+            except Exception:
+                pass
 
         # 5. DSA Priority Queue CSV
-        path_pq = match_dir / "dsa" / f"{stem}_priority_queue_ranking.csv"
-        if path_pq.exists():
-            data["pq_df"] = pd.read_csv(path_pq)
+        path_pq = _find_file("dsa", f"{stem}_priority_queue_ranking.csv", "*priority_queue_ranking.csv")
+        if path_pq:
+            try:
+                data["pq_df"] = pd.read_csv(path_pq)
+            except Exception:
+                pass
 
         # 6. DSA Lookup JSON
-        path_lookup = match_dir / "dsa" / f"{stem}_player_lookup.json"
-        if path_lookup.exists():
-            data["lookup_json"] = json.loads(path_lookup.read_text(encoding="utf-8"))
+        path_lookup = _find_file("dsa", f"{stem}_player_lookup.json", "*player_lookup.json")
+        if path_lookup:
+            try:
+                data["lookup_json"] = json.loads(path_lookup.read_text(encoding="utf-8"))
+            except Exception:
+                pass
 
         # 7. Possession Summary JSON
-        path_poss = match_dir / "ball_possession" / f"{stem}_possession_summary.json"
-        if path_poss.exists():
-            data["possession_json"] = json.loads(path_poss.read_text(encoding="utf-8"))
+        path_poss = _find_file("ball_possession", f"{stem}_possession_summary.json", "*possession_summary.json")
+        if path_poss:
+            try:
+                data["possession_json"] = json.loads(path_poss.read_text(encoding="utf-8"))
+            except Exception:
+                pass
 
         # 8. Interaction Edges CSV
-        path_edges = match_dir / "player_interaction_graph" / f"{stem}_interaction_edges.csv"
-        if path_edges.exists():
-            data["edges_df"] = pd.read_csv(path_edges)
+        path_edges = _find_file("player_interaction_graph", f"{stem}_interaction_edges.csv", "*interaction_edges.csv")
+        if path_edges:
+            try:
+                data["edges_df"] = pd.read_csv(path_edges)
+            except Exception:
+                pass
 
         # 9. Pipeline Manifest
         path_manifest = match_dir / "pipeline_execution_manifest.txt"
         if path_manifest.exists():
-            data["manifest_text"] = path_manifest.read_text(encoding="utf-8")
+            try:
+                data["manifest_text"] = path_manifest.read_text(encoding="utf-8")
+            except Exception:
+                pass
 
-        self._cache[cache_key] = data
+        # Only cache when RAG doc loaded successfully
+        if data.get("rag_doc") is not None:
+            self._cache[cache_key] = data
         return data
+
+    def clear_cache(self, match_id: Optional[str] = None) -> None:
+        if match_id:
+            stem = match_id.replace("testing_", "")
+            self._cache = {k: v for k, v in self._cache.items() if not k.startswith(stem)}
+        else:
+            self._cache.clear()
 
     def get_match_summary(self, match_id: str) -> dict[str, Any]:
         data = self.load_match_data(match_id)

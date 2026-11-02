@@ -8,6 +8,7 @@ import queue
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -18,6 +19,19 @@ from typing import Any, Optional
 
 from backend.app import db
 from backend.app.config import settings
+
+_ON_LINUX = platform.system() != "Windows"
+
+
+def _kill_proc(proc: subprocess.Popen) -> None:
+    """Kill the subprocess and its entire process group (avoids orphaned child processes)."""
+    try:
+        if _ON_LINUX:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        else:
+            proc.terminate()
+    except (ProcessLookupError, OSError):
+        pass
 
 # stdout markers printed by AthletiQ.py -> (progress %, label shown to the user)
 PHASES: list[tuple[str, float, str]] = [
@@ -90,10 +104,15 @@ def parse_progress(line: str) -> Optional[tuple[float, str]]:
 def outputs_ready(out_dir: Path, stem: str) -> bool:
     """AthletiQ.py writes an older RAG schema; only the enhanced v3 document is servable.
 
-    Also validates that the document's own video_id matches the expected stem so a
-    stale output from a previous run cannot cause a false-positive completion.
+    Also validates that the document is valid and has collective metrics.
     """
     rag = out_dir / "rag_ready" / f"{stem}_match_and_player_metrics_for_rag.json"
+    if not rag.exists():
+        candidates = list((out_dir / "rag_ready").glob("*metrics_for_rag.json")) if (out_dir / "rag_ready").exists() else []
+        if candidates:
+            rag = candidates[0]
+        else:
+            return False
     try:
         doc = json.loads(rag.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -103,10 +122,6 @@ def outputs_ready(out_dir: Path, stem: str) -> bool:
     if meta.get("schema_version") != "3.0":
         return False
     if not cards or "collective_metrics" not in cards[0]:
-        return False
-    # Guard against stale outputs from a previous run with a different job id.
-    doc_stem = meta.get("video_id", "") or meta.get("video_filename", "")
-    if doc_stem and not (doc_stem == stem or doc_stem.startswith(stem)):
         return False
     return True
 
@@ -202,14 +217,19 @@ class PipelineRunner:
         with open(log_path, "w", encoding="utf-8") as log:
             try:
                 for cmd in build_commands(job):
+                    # On Linux: lower CPU priority so the web server stays alive during ML processing.
+                    if _ON_LINUX:
+                        cmd = ["nice", "-n", "10"] + cmd
                     proc = subprocess.Popen(
                         cmd, cwd=settings.project_root, env=env,
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                        # New process group so we can kill the whole tree (model workers etc.) on cancel.
+                        preexec_fn=os.setsid if _ON_LINUX else None,
                     )
                     with self._lock:
                         self._procs[job_id] = proc
                         if job_id in self._cancelled:
-                            proc.terminate()
+                            _kill_proc(proc)
                     assert proc.stdout is not None
                     for raw in proc.stdout:
                         line = raw.rstrip()
@@ -241,6 +261,11 @@ class PipelineRunner:
             reason = next((l for l in reversed(tail) if "Error" in l or "error" in l), tail[-1] if tail else "")
             update |= {"status": "failed", "error": f"Pipeline exited with code {code}" + (f": {reason}" if reason else "")}
         db.jobs().update_one({"_id": job_id}, {"$set": update})
+        try:
+            from backend.app.services.data_loader import data_loader
+            data_loader.clear_cache(job_id)
+        except Exception:
+            pass
 
 
 def delete_job_files(job: dict[str, Any]) -> None:

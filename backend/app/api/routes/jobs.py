@@ -140,4 +140,9 @@ def delete_job(job_id: str, user: dict[str, Any] = Depends(get_current_user)):
     if job["status"] in ("queued", "running"):
         raise HTTPException(status_code=409, detail="Cancel the analysis before deleting it")
     delete_job_files(job)
+    try:
+        from backend.app.services.data_loader import data_loader
+        data_loader.clear_cache(job_id)
+    except Exception:
+        pass
     db.jobs().delete_one({"_id": job_id})

@@ -72,7 +72,18 @@ export function Analyses({ onOpen, goUpload, onCompleted }: { onOpen: (id: strin
     load();
   };
 
-  if (!jobs) return <div className="center-state"><div className="loader" /></div>;
+  if (!jobs) {
+    if (error) return (
+      <div className="center-state">
+        <div className="card" style={{ maxWidth: 420, padding: 28, gap: 14 }}>
+          <div className="eyebrow tb">Connection error</div>
+          <p className="muted" style={{ margin: 0 }}>{error}</p>
+          <button className="btn-volt" style={{ height: 42 }} onClick={load}>Retry</button>
+        </div>
+      </div>
+    );
+    return <div className="center-state"><div className="loader" /></div>;
+  }
 
   if (jobs.length === 0)
     return (
