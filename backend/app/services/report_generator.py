@@ -21,12 +21,16 @@ class MatchReportGenerator:
         top_dsa = rag_doc.get("top_performers_dsa_priority_ranking", [])
 
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        poss = analytics.get("possession_split", {})
+        pa, pb = poss.get("team_a_percent", 0.0), poss.get("team_b_percent", 0.0)
+        obs = analytics.get("total_raw_observations_preserved", 0)
+        takeaway = MatchReportGenerator._takeaway(analytics, pa, pb)
 
         lines = [
             f"# ATHLETIQ EXECUTIVE MATCH SCOUTING & TACTICAL REPORT",
             f"**Match ID:** `{match_id}` | **Video File:** `{meta.get('video_filename', f'{match_id}.mp4')}` | **Generated:** {ts}",
             f"**Pitch Specifications:** FIFA Standard 105m x 68m | **Calibration:** PnLCalib Geometric Homography (Validated)",
-            f"**Data Integrity Policy:** Zero Wastage — 100% Observation Retention (7,215 / 7,215 frames preserved in responsible player buckets)",
+            f"**Data Integrity Policy:** Zero Wastage — 100% Observation Retention ({obs:,} / {obs:,} observations preserved in responsible player buckets)",
             "",
             "---",
             "",
@@ -38,10 +42,10 @@ class MatchReportGenerator:
             f"| **Collective Distance Covered** | **{analytics.get('team_a_collective_distance_meters', 0):.2f} m** | {analytics.get('team_b_collective_distance_meters', 0):.2f} m | **{analytics.get('match_total_collective_distance_meters', 0):.2f} m** |",
             f"| **High-Intensity Sprints** | **{analytics.get('team_a_collective_sprints', 0)}** | {analytics.get('team_b_collective_sprints', 0)} | **{analytics.get('match_total_collective_sprints', 0)} Sprints** |",
             f"| **Ball Touches & Involvement** | **{analytics.get('team_a_collective_touches', 0)}** | {analytics.get('team_b_collective_touches', 0)} | **{analytics.get('match_total_collective_touches', 0)} Touches** |",
-            f"| **Possession Share** | **{analytics.get('possession_split', {}).get('team_a_percent', 80.1)}%** | {analytics.get('possession_split', {}).get('team_b_percent', 19.9)}% | 100.0% Control Accounted |",
+            f"| **Possession Share** | **{pa}%** | {pb}% | 100.0% Control Accounted |",
             f"| **Observation Retention Rate** | 100.0% | 100.0% | **100.0% (Zero Loss)** |",
             "",
-            "> **Tactical Takeaway:** Team A dictated the tempo with aggressive territorial pressure (80.1% possession, 137 touches), covering over double the collective physical distance of Team B (1,528.38 m vs 729.50 m) with sustained high-workrate sprinting.",
+            f"> **Tactical Takeaway:** {takeaway}",
             "",
             "---",
             "",
@@ -105,8 +109,7 @@ class MatchReportGenerator:
             "",
             "## 4. Coach & Tactical Recommendations",
             "",
-            "1. **Pressing Triggers & Transition Defense:** Team A's dynamic midfield unit (Players 14, 3, 2, 1) generated massive forward momentum. However, high sprint mileage (>150m) across Players 14 and 3 suggests substitution rotations around minute 65 to sustain counter-pressing intensity.",
-            "2. **Team B Compactness:** Team B players remained primarily anchored in defensive thirds (>50% occupancy). Transition winger outlets (Player 17 & 21) require quicker ball release from defensive turnovers to exploit space vacated by Team A's advanced fullbacks.",
+            *MatchReportGenerator._recommendations(cards),
             "",
             "================================================================================",
             "END OF ATHLETIQ EXECUTIVE SCOUTING REPORT",
@@ -114,6 +117,49 @@ class MatchReportGenerator:
         ])
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _takeaway(analytics: dict[str, Any], pa: float, pb: float) -> str:
+        da = analytics.get("team_a_collective_distance_meters", 0.0)
+        db = analytics.get("team_b_collective_distance_meters", 0.0)
+        ta = analytics.get("team_a_collective_touches", 0)
+        tb = analytics.get("team_b_collective_touches", 0)
+        owner = None if pa == pb else ("Team A" if pa > pb else "Team B")
+        lead = (
+            "Possession was evenly shared"
+            if owner is None
+            else f"{owner} controlled the ball ({max(pa, pb)}% possession, {ta if owner == 'Team A' else tb} touches)"
+        )
+        if max(da, db) == 0:
+            return f"{lead}."
+        distances = f"(Team A {da:,.2f} m vs Team B {db:,.2f} m)"
+        ratio = max(da, db) / max(min(da, db), 1e-6)
+        if ratio < 1.15:
+            return f"{lead}, with physical output closely matched between the teams {distances}."
+        runner = "Team A" if da > db else "Team B"
+        effort = f"{ratio:.1f}x the collective distance of the opposition {distances}"
+        return f"{lead} and also out-ran them, covering {effort}." if runner == owner else f"{lead}, while {runner} did more of the running, covering {effort}."
+
+    @staticmethod
+    def _recommendations(cards: list[dict[str, Any]]) -> list[str]:
+        if not cards:
+            return ["No player data was available to derive recommendations."]
+        by_sprint = sorted(cards, key=lambda c: c["collective_metrics"]["sprint_distance_meters"], reverse=True)[:2]
+        load = ", ".join(f"Player {c['player_id']} ({c['collective_metrics']['sprint_distance_meters']:.1f} m)" for c in by_sprint)
+        lines = [f"1. **Workload Management:** The highest high-speed running came from {load}. Track their recovery and plan rotations to keep pressing intensity late in the match."]
+
+        teams = {t: [c for c in cards if c["team"] == t] for t in ("team_a", "team_b")}
+        avg_def = {t: sum(c["spatial_distribution"]["defensive_third_pct"] for c in cs) / len(cs) for t, cs in teams.items() if cs}
+        if len(avg_def) == 2:
+            deep = max(avg_def, key=avg_def.get)
+            other = "team_b" if deep == "team_a" else "team_a"
+            outlets = sorted(teams[deep], key=lambda c: c["spatial_distribution"]["attacking_third_pct"], reverse=True)[:2]
+            names = " & ".join(f"Player {c['player_id']}" for c in outlets)
+            lines.append(
+                f"2. **{deep.replace('_', ' ').title()} Compactness:** {deep.replace('_', ' ').title()} averaged {avg_def[deep]:.1f}% of their time in the defensive third "
+                f"(vs {avg_def[other]:.1f}% for {other.replace('_', ' ').title()}). Their most advanced outlets ({names}) are the key to releasing pressure on turnovers."
+            )
+        return lines
 
     @classmethod
     def export_report_files(cls, match_id: str, output_dir: Optional[Path] = None) -> Path:

@@ -1,6 +1,7 @@
 """Pydantic schemas for AthletiQ API data models."""
 
 from __future__ import annotations
+from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
@@ -10,6 +11,9 @@ class HealthResponse(BaseModel):
     version: str
     environment: str
     default_match: str
+    database: str = "unknown"
+    database_ready: bool = False
+    pipeline_mode: str = "local"
     data_retention_policy: str = "zero_wastage_collective_metrics_verified"
 
 
@@ -166,3 +170,67 @@ class RAGQueryResponse(BaseModel):
     answer: str
     sources_used: list[str]
     context_data: dict[str, Any]
+
+
+class RegisterRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    email: str = Field(max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(max_length=254)
+    password: str = Field(max_length=128)
+
+
+class PasswordResetRequest(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class PasswordResetConfirm(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class PasswordResetRequestResponse(BaseModel):
+    message: str
+    reset_token: str | None = None
+
+
+class UserOut(BaseModel):
+    id: str
+    name: str
+    email: str
+    created_at: datetime
+
+
+class AuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+class VideoInfo(BaseModel):
+    fps: float
+    frame_count: int
+    duration_seconds: float
+    width: int
+    height: int
+
+
+class JobOut(BaseModel):
+    id: str
+    title: str
+    original_filename: str
+    status: str
+    progress: float
+    phase: str
+    error: Optional[str] = None
+    log_tail: list[str] = Field(default_factory=list)
+    video: VideoInfo
+    start_frame: int
+    max_frames: int
+    size_bytes: int
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    finished_at: Optional[datetime] = None

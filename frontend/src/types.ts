@@ -2,10 +2,43 @@ export type TeamId = "team_a" | "team_b";
 
 export interface MatchListItem {
   match_id: string;
-  folder_name: string;
+  title: string;
   status: string;
   has_rag_package: boolean;
   has_manifest: boolean;
+  is_demo: boolean;
+}
+
+export interface User {
+  id: string;
+  name: string;
+  email: string;
+  created_at: string;
+}
+
+export interface AuthResponse {
+  access_token: string;
+  user: User;
+}
+
+export type JobStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface Job {
+  id: string;
+  title: string;
+  original_filename: string;
+  status: JobStatus;
+  progress: number;
+  phase: string;
+  error?: string | null;
+  log_tail: string[];
+  video: { fps: number; frame_count: number; duration_seconds: number; width: number; height: number };
+  start_frame: number;
+  max_frames: number;
+  size_bytes: number;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface TeamAnalytics {

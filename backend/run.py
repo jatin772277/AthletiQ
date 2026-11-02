@@ -14,9 +14,11 @@ if str(PROJECT_ROOT) not in sys.path:
 
 
 def main():
+    from backend.app.config import settings
+
     parser = argparse.ArgumentParser(description="Launch AthletiQ FastAPI Backend")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8000, help="Port (default: 8000)")
+    parser.add_argument("--host", default=settings.host, help=f"Host address (default: {settings.host})")
+    parser.add_argument("--port", type=int, default=settings.port, help=f"Port (default: {settings.port})")
     parser.add_argument("--reload", action="store_true", default=False, help="Enable auto-reload")
     args = parser.parse_args()
 

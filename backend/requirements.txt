@@ -1,0 +1,16 @@
+# AthletiQ API (the CV pipeline itself runs in its own environment, see PIPELINE_MODE in .env.example)
+fastapi
+uvicorn
+pydantic
+python-dotenv
+python-multipart
+pandas
+pymongo
+PyJWT
+opencv-python-headless
+groq
+
+# Tests
+pytest
+mongomock
+httpx

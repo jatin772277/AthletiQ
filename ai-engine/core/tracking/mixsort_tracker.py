@@ -1,6 +1,7 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+import os
 import sys
 import gc
 
@@ -57,12 +58,11 @@ class AthletiQMixSort:
         )
 
         if config_path is None:
-            config_path = (
-                self.project_root
-                / "ai-engine"
-                / "models"
-                / "mixsort_final.yaml"
-            )
+            model_assets = Path(os.getenv(
+                "ATHLETIQ_MODEL_ASSETS_DIR",
+                str(self.project_root / "ai-engine" / "models"),
+            )).expanduser()
+            config_path = model_assets / "mixsort_final.yaml"
 
         self.config_path = Path(config_path)
 
