@@ -160,3 +160,6 @@ ai-engine/notebooks/PnLCalib/SV_lines
 
 # Local Claude configuration
 .claude/
+# Documentation - keep local, do not push to GitHub
+docs/
+/docs/
